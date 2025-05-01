@@ -6,33 +6,29 @@ import random
 import re
 import time
 from datetime import datetime
-import sqlite3 # Import sqlite3 for catching its specific errors if needed in this file
+import sqlite3
 
 from telethon import TelegramClient
-# Specific imports for clarity and potentially better type hinting
 from telethon.tl.types import (
     PeerChannel, PeerChat, PeerUser, InputPeerChannel, InputPeerChat, InputPeerUser,
     Channel, User as TelethonUser, Chat as TelethonChat
 )
-# Corrected error imports based on Telethon v1.36.0 / common usage
 from telethon.errors import (
     SessionPasswordNeededError, FloodWaitError, ChatSendMediaForbiddenError,
-    UserNotParticipantError, ChatAdminRequiredError, # UserBannedInChatError REMOVED
+    UserNotParticipantError, ChatAdminRequiredError,
     PhoneNumberInvalidError, PhoneCodeInvalidError, PhoneCodeExpiredError,
-    PasswordHashInvalidError, ApiIdInvalidError, AuthKeyError, # ConnectionError REMOVED
+    PasswordHashInvalidError, ApiIdInvalidError, AuthKeyError,
     UserDeactivatedBanError, UsernameNotOccupiedError, ChannelPrivateError, InviteHashExpiredError, InviteHashInvalidError,
-    MessageIdInvalidError, PeerIdInvalidError, UserBlockedError, ChatWriteForbiddenError # Keep ChatWriteForbiddenError
+    MessageIdInvalidError, PeerIdInvalidError, UserBlockedError, ChatWriteForbiddenError
 )
-# Import RPC functions used
 from telethon.tl.functions.channels import JoinChannelRequest, GetFullChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest, GetMessagesRequest
 from telethon.tl.functions.account import GetPasswordRequest
 
 import database as db
 from config import (
-    SESSION_DIR, CLIENT_TIMEOUT, CHECK_TASKS_INTERVAL, UTC_TZ, log # Use logger from config
+    SESSION_DIR, CLIENT_TIMEOUT, CHECK_TASKS_INTERVAL, UTC_TZ, log
 )
-# from translations import get_text # REMOVED Import from translations
 
 # --- Userbot Runtime Management ---
 _userbots = {}
@@ -42,318 +38,162 @@ _stop_event = threading.Event()
 # --- Helper Functions ---
 
 def _get_session_path(phone):
-    """Returns the absolute path for a userbot's session file."""
     safe_phone = re.sub(r'[^\d\+]', '', phone)
     return os.path.join(SESSION_DIR, f"{safe_phone}.session")
 
 async def _create_telethon_client_instance(session_path, api_id, api_hash, loop):
-    """Creates and returns a configured Telethon client instance."""
     log.debug(f"Creating TelethonClient for session: {session_path}")
-    client = TelegramClient(
-        session_path,
-        api_id,
-        api_hash,
-        timeout=CLIENT_TIMEOUT,
-        loop=loop,
-        device_model="PC 64bit",
-        system_version="Linux",
-        app_version="1.0.0"
-    )
+    client = TelegramClient(session_path, api_id, api_hash, timeout=CLIENT_TIMEOUT, loop=loop, device_model="PC 64bit", system_version="Linux", app_version="1.0.0")
     return client
 
 def _run_loop(loop, phone_for_log):
-    """Target function for the userbot's dedicated event loop thread."""
-    asyncio.set_event_loop(loop)
-    thread_name = f"UserBotLoop-{phone_for_log}"
-    threading.current_thread().name = thread_name
-    log.info(f"Event loop thread started: {thread_name}")
+    asyncio.set_event_loop(loop); thread_name = f"UserBotLoop-{phone_for_log}"; threading.current_thread().name = thread_name; log.info(f"Event loop thread started: {thread_name}")
+    try: loop.run_forever()
+    except Exception as e: log.error(f"Exception in event loop for {phone_for_log}: {e}", exc_info=True)
+    finally: log.info(f"Event loop stopping for {phone_for_log}...");
     try:
-        loop.run_forever()
-    except Exception as e:
-        log.error(f"Exception in event loop for {phone_for_log}: {e}", exc_info=True)
-    finally:
-        log.info(f"Event loop stopping for {phone_for_log}...")
-        try:
-             if loop.is_running():
-                  loop.run_until_complete(loop.shutdown_asyncgens())
-             loop.close()
-             log.info(f"Event loop closed cleanly for {phone_for_log}.")
-        except Exception as close_e:
-             log.error(f"Error closing event loop for {phone_for_log}: {close_e}")
+        if loop.is_running(): loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close(); log.info(f"Event loop closed cleanly for {phone_for_log}.")
+    except Exception as close_e: log.error(f"Error closing event loop for {phone_for_log}: {close_e}")
 
 async def _safe_connect(client: TelegramClient, phone: str) -> bool:
-    """Connects the client if not connected, handling common errors and updating DB status."""
-    if client.is_connected():
-        return True
-
-    log.info(f"Connecting userbot {phone}...")
-    db.update_userbot_status(phone, 'connecting')
-    try:
-        await client.connect()
-        if await client.is_user_authorized():
-             log.info(f"Userbot {phone} connected and authorized.")
-             return True
-        else:
-             log.error(f"Userbot {phone} connected but NOT authorized. Session invalid?")
-             db.update_userbot_status(phone, 'error', last_error="Session invalid - Not Authorized")
-             await _safe_disconnect(client, phone, update_db=False)
-             return False
-    except AuthKeyError:
-        log.error(f"Authentication key error for {phone}. Session invalid. Deleting.")
-        db.update_userbot_status(phone, 'error', last_error="Invalid session (AuthKeyError)")
-        await _delete_session_file(phone)
-        return False
-    except (ConnectionError, asyncio.TimeoutError, OSError) as e: # Catch built-in ConnectionError now
-        log.error(f"Connection failed for {phone}: {e}")
-        db.update_userbot_status(phone, 'error', last_error=f"Connection Error: {type(e).__name__}")
-        return False
-    except Exception as e:
-        log.exception(f"Unexpected error connecting userbot {phone}: {e}", exc_info=True)
-        db.update_userbot_status(phone, 'error', last_error=f"Unexpected connect error: {type(e).__name__}")
-        return False
+    if client.is_connected(): return True
+    log.info(f"Connecting userbot {phone}..."); db.update_userbot_status(phone, 'connecting')
+    try: await client.connect();
+    if await client.is_user_authorized(): log.info(f"Userbot {phone} connected and authorized."); return True
+    else: log.error(f"Userbot {phone} connected but NOT authorized. Session invalid?"); db.update_userbot_status(phone, 'error', last_error="Session invalid - Not Authorized"); await _safe_disconnect(client, phone, update_db=False); return False
+    except AuthKeyError: log.error(f"Auth key error for {phone}. Session invalid. Deleting."); db.update_userbot_status(phone, 'error', last_error="Invalid session (AuthKeyError)"); await _delete_session_file(phone); return False
+    except (ConnectionError, asyncio.TimeoutError, OSError) as e: log.error(f"Connection failed for {phone}: {e}"); db.update_userbot_status(phone, 'error', last_error=f"Connection Error: {type(e).__name__}"); return False
+    except Exception as e: log.exception(f"Unexpected error connecting userbot {phone}: {e}", exc_info=True); db.update_userbot_status(phone, 'error', last_error=f"Unexpected connect error: {type(e).__name__}"); return False
 
 async def _safe_disconnect(client: TelegramClient, phone: str, update_db: bool = True):
-    """Disconnects the client gracefully."""
     if client and client.is_connected():
-        log.info(f"Disconnecting userbot {phone}...")
-        try:
-            await client.disconnect()
-            log.info(f"Userbot {phone} disconnected.")
-        except Exception as e:
-            log.error(f"Error during graceful disconnect for userbot {phone}: {e}")
+        log.info(f"Disconnecting userbot {phone}...");
+        try: await client.disconnect(); log.info(f"Userbot {phone} disconnected.")
+        except Exception as e: log.error(f"Error during graceful disconnect for userbot {phone}: {e}")
 
 async def _delete_session_file(phone):
-     """Deletes the session file and its journal."""
-     session_path = _get_session_path(phone)
-     journal_path = f"{session_path}-journal"
-     deleted = False
+     session_path = _get_session_path(phone); journal_path = f"{session_path}-journal"; deleted = False
      try:
-         if os.path.exists(session_path):
-             os.remove(session_path)
-             log.info(f"Deleted session file: {session_path}")
-             deleted = True
-         if os.path.exists(journal_path):
-             os.remove(journal_path)
-             log.info(f"Deleted session journal file: {journal_path}")
-     except OSError as e:
-         log.error(f"Failed to delete session file(s) for {phone}: {e}")
+         if os.path.exists(session_path): os.remove(session_path); log.info(f"Deleted session file: {session_path}"); deleted = True
+         if os.path.exists(journal_path): os.remove(journal_path); log.info(f"Deleted session journal file: {journal_path}")
+     except OSError as e: log.error(f"Failed to delete session file(s) for {phone}: {e}")
      return deleted
 
 # --- Public Userbot Runtime Functions ---
-
 def get_userbot_runtime_info(phone_number):
-     """
-     Gets the runtime info (client, loop, lock, thread) for a userbot.
-     Initializes runtime if it doesn't exist for a bot found in the DB.
-     Returns the runtime dict or None if initialization fails or bot not in DB.
-     """
      with _userbots_lock:
         if phone_number in _userbots:
             bot_info = _userbots[phone_number]
-            if bot_info.get('thread') and bot_info['thread'].is_alive():
-                log.debug(f"Returning existing runtime for {phone_number}")
-                return bot_info
-            else:
-                log.warning(f"Thread for userbot {phone_number} found dead. Cleaning up.")
-                loop = bot_info.get('loop')
-                if loop and loop.is_running():
-                     loop.call_soon_threadsafe(loop.stop)
-                del _userbots[phone_number]
-
+            if bot_info.get('thread') and bot_info['thread'].is_alive(): log.debug(f"Returning existing runtime for {phone_number}"); return bot_info
+            else: log.warning(f"Thread for userbot {phone_number} found dead. Cleaning up."); loop = bot_info.get('loop');
+            if loop and loop.is_running(): loop.call_soon_threadsafe(loop.stop);
+            del _userbots[phone_number]
         log.info(f"Attempting to initialize runtime for userbot {phone_number}...")
         userbot_db = db.find_userbot(phone_number)
-        if not userbot_db:
-            log.error(f"Userbot {phone_number} not found in database for runtime initialization.")
-            return None
-
-        if userbot_db['status'] == 'inactive':
-            log.warning(f"Skipping runtime initialization for inactive userbot {phone_number}.")
-            return None
-
-        session_file = _get_session_path(phone_number)
-        api_id = userbot_db['api_id']
-        api_hash = userbot_db['api_hash']
-
+        if not userbot_db: log.error(f"Userbot {phone_number} not found in DB."); return None
+        if userbot_db['status'] == 'inactive': log.warning(f"Skipping runtime initialization for inactive userbot {phone_number}."); return None
+        session_file = _get_session_path(phone_number); api_id = userbot_db['api_id']; api_hash = userbot_db['api_hash']
         try:
-            loop = asyncio.new_event_loop()
-            lock = asyncio.Lock()
-
-            async def _create_client_task():
-                return await _create_telethon_client_instance(session_file, api_id, api_hash, loop)
+            loop = asyncio.new_event_loop(); lock = asyncio.Lock()
+            async def _create_client_task(): return await _create_telethon_client_instance(session_file, api_id, api_hash, loop)
             future = asyncio.run_coroutine_threadsafe(_create_client_task(), loop)
-
-            thread = threading.Thread(target=_run_loop, args=(loop, phone_number), daemon=True)
-            thread.start()
-
-            client = future.result(timeout=CLIENT_TIMEOUT)
-            log.info(f"Telethon client created for {phone_number}")
-
+            thread = threading.Thread(target=_run_loop, args=(loop, phone_number), daemon=True); thread.start()
+            client = future.result(timeout=CLIENT_TIMEOUT); log.info(f"Telethon client created for {phone_number}")
             bot_info = {'client': client, 'loop': loop, 'lock': lock, 'thread': thread}
-            _userbots[phone_number] = bot_info
-            db.update_userbot_status(phone_number, 'initializing')
-
+            _userbots[phone_number] = bot_info; db.update_userbot_status(phone_number, 'initializing')
             async def _initial_connect_check():
                  connected = await _safe_connect(client, phone_number)
-                 if connected:
-                      log.info(f"Initial connection check successful for {phone_number}")
-                      try:
-                          me = await client.get_me()
-                          db.update_userbot_status(phone_number, 'active', username=me.username if me else None)
-                      except Exception as get_me_err:
-                           log.error(f"Failed to get_me after connect for {phone_number}: {get_me_err}")
-                           db.update_userbot_status(phone_number, 'error', last_error=f"get_me failed: {type(get_me_err).__name__}")
-                 else:
-                      log.warning(f"Initial connection check failed for {phone_number}. Status updated by _safe_connect.")
-
+                 if connected: log.info(f"Initial connect ok for {phone_number}");
+                 try: me = await client.get_me(); db.update_userbot_status(phone_number, 'active', username=me.username if me else None)
+                 except Exception as get_me_err: log.error(f"get_me fail after connect {phone_number}: {get_me_err}"); db.update_userbot_status(phone_number, 'error', last_error=f"get_me fail: {type(get_me_err).__name__}")
+                 else: log.warning(f"Initial connect failed for {phone_number}.")
             asyncio.run_coroutine_threadsafe(_initial_connect_check(), loop)
-
-            log.info(f"Runtime initialized for userbot {phone_number}. Thread started.")
-            return bot_info
-
+            log.info(f"Runtime initialized for userbot {phone_number}. Thread started."); return bot_info
         except Exception as e:
-            log.critical(f"CRITICAL: Failed to initialize runtime for userbot {phone_number}: {e}", exc_info=True)
-            db.update_userbot_status(phone_number, 'error', last_error=f"Runtime init failed: {type(e).__name__}")
+            log.critical(f"CRITICAL runtime init fail {phone_number}: {e}", exc_info=True); db.update_userbot_status(phone_number, 'error', last_error=f"Runtime init fail: {type(e).__name__}")
             if 'loop' in locals() and loop.is_running(): loop.call_soon_threadsafe(loop.stop)
             if 'thread' in locals() and thread.is_alive(): thread.join(timeout=2)
             if phone_number in _userbots: del _userbots[phone_number]
             return None
 
 def stop_userbot_runtime(phone_number):
-    """Stops the event loop and disconnects a specific userbot."""
-    with _userbots_lock:
-         bot_info = _userbots.pop(phone_number, None)
-
+    with _userbots_lock: bot_info = _userbots.pop(phone_number, None)
     if bot_info:
         log.info(f"Stopping runtime for userbot {phone_number}...")
-        client = bot_info.get('client')
-        loop = bot_info.get('loop')
-        thread = bot_info.get('thread')
-
+        client, loop, thread = bot_info.get('client'), bot_info.get('loop'), bot_info.get('thread')
         if client and loop and loop.is_running():
             future = asyncio.run_coroutine_threadsafe(_safe_disconnect(client, phone_number), loop)
             try: future.result(timeout=CLIENT_TIMEOUT / 2)
-            except Exception as e: log.warning(f"Error during disconnect future for {phone_number} on stop: {e}")
-
+            except Exception as e: log.warning(f"Error disconnect future {phone_number} on stop: {e}")
         if loop and loop.is_running(): loop.call_soon_threadsafe(loop.stop)
-
-        if thread and thread.is_alive():
-            log.debug(f"Waiting for thread {thread.name} to finish...")
-            thread.join(timeout=5)
-            if thread.is_alive(): log.warning(f"Thread {thread.name} did not stop gracefully.")
-            else: log.info(f"Thread {thread.name} stopped.")
+        if thread and thread.is_alive(): log.debug(f"Wait thread {thread.name}..."); thread.join(timeout=5);
+        if thread and thread.is_alive(): log.warning(f"Thread {thread.name} no stop gracefully.")
+        else: log.info(f"Thread {thread.name if thread else '?'} stopped.")
         return True
-    else:
-        log.warning(f"Tried to stop runtime for {phone_number}, but it wasn't running.")
-        return False
+    else: log.warning(f"Tried stop runtime {phone_number}, but not running."); return False
 
 # --- Authentication Flow ---
-
 async def start_authentication_flow(phone, api_id, api_hash):
-    """
-    Initiates the Telethon authentication process using a TEMPORARY client/loop.
-    Returns: Tuple (status, data) as described before.
-    """
-    session_file = _get_session_path(phone)
-    await _delete_session_file(phone)
-
-    temp_loop = asyncio.new_event_loop()
-    temp_client = None
-    auth_result_status = 'error'
-    auth_result_data = "Initialization failed"
-
+    session_file = _get_session_path(phone); await _delete_session_file(phone)
+    temp_loop = asyncio.new_event_loop(); temp_client = None; status = 'error'; data = "Init fail"
     try:
-        temp_client = await _create_telethon_client_instance(session_file, api_id, api_hash, temp_loop)
-        log.info(f"Attempting connection for authentication: {phone}")
-        code_request_info = await temp_client.send_code_request(phone)
-        log.info(f"Code request sent to {phone}. Phone code hash obtained.")
-        auth_result_status = 'code_needed'
-        auth_result_data = {'client': temp_client, 'loop': temp_loop, 'phone_code_hash': code_request_info.phone_code_hash}
-
+        temp_client = await _create_telethon_client_instance(session_file, api_id, api_hash, temp_loop); log.info(f"Start auth connect {phone}")
+        code_info = await temp_client.send_code_request(phone); log.info(f"Code request sent {phone}.")
+        status = 'code_needed'; data = {'client': temp_client, 'loop': temp_loop, 'phone_code_hash': code_info.phone_code_hash}
     except SessionPasswordNeededError:
-         log.warning(f"Password needed immediately for {phone} (code step skipped).")
+         log.warning(f"Password needed immediately {phone}.");
          try:
               if not temp_client: temp_client = await _create_telethon_client_instance(session_file, api_id, api_hash, temp_loop)
               if not temp_client.is_connected(): await temp_client.connect()
-              pwd_state = await temp_client(GetPasswordRequest())
-              log.info(f"Password required for {phone}. Hint: {getattr(pwd_state, 'hint', 'None')}")
-              auth_result_status = 'password_needed'
-              auth_result_data = {'client': temp_client, 'loop': temp_loop, 'pwd_state': pwd_state}
-         except Exception as pwd_err: log.error(f"Error getting password state for {phone}: {pwd_err}"); auth_result_status = 'error'; auth_result_data = f"Failed to get password details: {pwd_err}"
-    except FloodWaitError as e: log.warning(f"Flood wait code request {phone}: {e.seconds}s"); auth_result_status = 'error'; auth_result_data = f"Flood wait: Try again in {e.seconds} seconds."
-    except (PhoneNumberInvalidError, ApiIdInvalidError, ApiIdPublishedFloodError) as e: log.error(f"Config/Phone error code request {phone}: {e}"); auth_result_status = 'error'; auth_result_data = f"Invalid config/phone: {e}"
-    except AuthKeyError: log.error(f"AuthKeyError initial code request {phone}."); auth_result_status = 'error'; auth_result_data = "Auth key error. Please try again."
-    except (ConnectionError, asyncio.TimeoutError, OSError) as e: log.error(f"Connection issue code request {phone}: {e}"); auth_result_status = 'error'; auth_result_data = f"Connection failed: {e}"
-    except Exception as e: log.exception(f"Unexpected error auth start {phone}: {e}"); auth_result_status = 'error'; auth_result_data = f"Unexpected error: {e}"
-
-    if auth_result_status == 'error':
-        await _safe_disconnect(temp_client, phone, update_db=False)
-        if temp_loop and not temp_loop.is_closed():
-            try: temp_loop.close(); log.debug("Temp auth loop closed on error.")
-            except Exception as loop_e: log.error(f"Error closing temp loop for {phone}: {loop_e}")
-        auth_result_data = {'error_message': str(auth_result_data)}
-
-    return auth_result_status, auth_result_data
+              pwd_state = await temp_client(GetPasswordRequest()); log.info(f"Passwd required {phone}. Hint: {getattr(pwd_state, 'hint', 'N')}")
+              status = 'password_needed'; data = {'client': temp_client, 'loop': temp_loop, 'pwd_state': pwd_state}
+         except Exception as pwd_e: log.error(f"Err get pwd state {phone}: {pwd_e}"); status = 'error'; data = f"Fail get pwd state: {pwd_e}"
+    except FloodWaitError as e: log.warning(f"Flood code req {phone}: {e.seconds}s"); status = 'error'; data = f"Flood wait: {e.seconds}s"
+    except (PhoneNumberInvalidError, ApiIdInvalidError, ApiIdPublishedFloodError) as e: log.error(f"Config/Phone err {phone}: {e}"); status = 'error'; data = f"Invalid cfg/phone: {e}"
+    except AuthKeyError: log.error(f"AuthKeyError code req {phone}."); status = 'error'; data = "Auth key error."
+    except (ConnectionError, asyncio.TimeoutError, OSError) as e: log.error(f"Conn issue code req {phone}: {e}"); status = 'error'; data = f"Conn failed: {e}"
+    except Exception as e: log.exception(f"Unexpected err auth start {phone}: {e}"); status = 'error'; data = f"Unexpected error: {e}"
+    if status == 'error':
+        await _safe_disconnect(temp_client, phone, update_db=False);
+        if temp_loop and not temp_loop.is_closed(): try: temp_loop.close(); log.debug("Temp auth loop closed error.")
+        except Exception as loop_e: log.error(f"Err close temp loop {phone}: {loop_e}");
+        data = {'error_message': str(data)}
+    return status, data
 
 async def complete_authentication_flow(auth_data, code=None, password=None):
-    """
-    Completes Telethon auth using temp client/loop from start_authentication_flow.
-    Returns: Tuple (status, data) as described before.
-    """
-    temp_client = auth_data.get('client')
-    temp_loop = auth_data.get('loop')
-    phone = "UnknownPhone"
-    final_status = 'error'
-    final_data = "Unknown auth failure"
-
+    temp_client = auth_data.get('client'); temp_loop = auth_data.get('loop'); phone = "Unknown"; status = 'error'; data = "Unknown fail"
     if not temp_client or not temp_loop: return 'error', {'error_message': "Invalid auth data (client/loop missing)."}
-
-    me_object = None
+    me = None
     try:
-        if code:
-            phone_code_hash = auth_data.get('phone_code_hash')
-            if not phone_code_hash: return 'error', {'error_message': "Internal Error: Missing phone_code_hash."}
-            log.info(f"Attempting code sign-in...")
-            me_object = await temp_client.sign_in(code=code, phone_code_hash=phone_code_hash)
-        elif password:
-            log.info(f"Attempting password sign-in...")
-            me_object = await temp_client.sign_in(password=password)
+        if code: phone_hash = auth_data.get('phone_code_hash');
+        if not phone_hash: return 'error', {'error_message': "Internal Error: Missing phone_hash."};
+        log.info(f"Attempt code sign-in..."); me = await temp_client.sign_in(code=code, phone_code_hash=phone_hash)
+        elif password: log.info(f"Attempt password sign-in..."); me = await temp_client.sign_in(password=password)
         else: return 'error', {'error_message': "No code or password provided."}
-
-        if me_object and await temp_client.is_user_authorized():
-            phone = me_object.phone; username = me_object.username
-            session_file_path = temp_client.session.filename
-            api_id = temp_client.api_id; api_hash = temp_client.api_hash
-            session_file_rel = os.path.relpath(session_file_path, SESSION_DIR)
-
-            log.info(f"Auth successful for {phone} (@{username}) via temp client.")
-            db_add_ok = db.add_userbot(phone, session_file_rel, api_id, api_hash, 'active', username, None, None)
-            if db_add_ok: final_status = 'success'; final_data = {'phone': phone, 'username': username}; log.info(f"Userbot {phone} info saved to DB."); get_userbot_runtime_info(phone)
-            else: final_status = 'error'; final_data = "Auth success, but DB save failed."; log.error(final_data)
-        else: final_status = 'error'; final_data = "Sign-in completed but authorization failed."; log.error(f"Auth check failed for {phone}")
-
-    except SessionPasswordNeededError: final_status = 'error'; final_data = "Password required. Restart process."
-    except (PhoneCodeInvalidError, PhoneCodeExpiredError): final_status = 'error'; final_data = "Invalid or expired code."
-    except PasswordHashInvalidError: final_status = 'error'; final_data = "Incorrect password."
-    except FloodWaitError as e: final_status = 'error'; final_data = f"Flood wait: Try again in {e.seconds} seconds."
-    except AuthKeyError: final_status = 'error'; final_data = "Auth key error. Session corrupt?"; await _delete_session_file(phone)
-    except UserDeactivatedBanError as e: final_status = 'error'; final_data = f"Account issue: Banned/Deactivated."; db.update_userbot_status(phone, 'error', last_error="Account Banned/Deactivated")
-    except (ConnectionError, asyncio.TimeoutError, OSError) as e: final_status = 'error'; final_data = f"Connection failed: {e}" # Catch built-in ConnectionError
-    except Exception as e: log.exception(f"Unexpected error auth completion {phone}: {e}"); final_status = 'error'; final_data = f"Unexpected error: {e}"
-
-    log.debug(f"Cleaning up temporary auth resources for {phone} (Status: {final_status}).")
-    await _safe_disconnect(temp_client, phone, update_db=False)
-    if temp_loop and not temp_loop.is_closed():
-        try: temp_loop.close(); log.debug(f"Temp auth loop {phone} closed.")
-        except Exception as loop_e: log.error(f"Error closing temp loop {phone}: {loop_e}")
-
-    if final_status == 'error' and isinstance(final_data, str): final_data = {'error_message': final_data}
-
-    return final_status, final_data
+        if me and await temp_client.is_user_authorized():
+            phone = me.phone; username = me.username; session_path = temp_client.session.filename; api_id = temp_client.api_id; api_hash = temp_client.api_hash
+            session_rel = os.path.relpath(session_path, SESSION_DIR); log.info(f"Auth OK {phone} (@{username}) temp client.")
+            db_ok = db.add_userbot(phone, session_rel, api_id, api_hash, 'active', username, None, None)
+            if db_ok: status = 'success'; data = {'phone': phone, 'username': username}; log.info(f"Userbot {phone} saved DB."); get_userbot_runtime_info(phone)
+            else: status = 'error'; data = "Auth OK, DB save failed."; log.error(data)
+        else: status = 'error'; data = "Sign-in complete but !authorized."; log.error(f"Auth check fail {phone}")
+    except SessionPasswordNeededError: status = 'error'; data = "Password required. Restart."
+    except (PhoneCodeInvalidError, PhoneCodeExpiredError): status = 'error'; data = "Invalid/expired code."
+    except PasswordHashInvalidError: status = 'error'; data = "Incorrect password."
+    except FloodWaitError as e: status = 'error'; data = f"Flood wait: {e.seconds}s"
+    except AuthKeyError: status = 'error'; data = "Auth key error."; await _delete_session_file(phone)
+    except UserDeactivatedBanError as e: status = 'error'; data = f"Account banned/deactivated."; db.update_userbot_status(phone, 'error', "Account Banned/Deactivated")
+    except (ConnectionError, asyncio.TimeoutError, OSError) as e: status = 'error'; data = f"Connection failed: {e}"
+    except Exception as e: log.exception(f"Unexpected err auth complete {phone}: {e}"); status = 'error'; data = f"Unexpected error: {e}"
+    log.debug(f"Clean temp auth res {phone} (Status: {status})."); await _safe_disconnect(temp_client, phone, update_db=False)
+    if temp_loop and not temp_loop.is_closed(): try: temp_loop.close(); log.debug(f"Temp auth loop {phone} closed.")
+    except Exception as loop_e: log.error(f"Err close temp loop {phone}: {loop_e}")
+    if status == 'error' and isinstance(data, str): data = {'error_message': data}
+    return status, data
 
 # --- Other Telethon Actions ---
-
 def parse_telegram_url_simple(url: str) -> tuple:
-    """Simplified URL parsing for join flow. Returns (type, identifier)."""
     url = url.strip()
     if match := re.match(r"https?://t\.me/\+([\w\d_-]+)/?", url): return "private_join", match.group(1)
     if match := re.match(r"https?://t\.me/joinchat/([\w\d_-]+)/?", url): return "private_join", match.group(1)
@@ -362,14 +202,12 @@ def parse_telegram_url_simple(url: str) -> tuple:
     return "unknown", url
 
 def _format_entity_detail(entity) -> dict:
-    """Formats Telethon entity into a standard detail dictionary."""
     if not entity: return {}
-    return { "id": entity.id, "name": getattr(entity, 'title', getattr(entity, 'username', f"ID {entity.id}")), "username": getattr(entity, 'username', None)}
+    return {"id": entity.id, "name": getattr(entity, 'title', getattr(entity, 'username', f"ID {entity.id}")), "username": getattr(entity, 'username', None)}
 
 async def join_groups_batch(phone, urls):
-    """ Manages joining multiple Telegram groups/channels for a specified userbot. Returns: Tuple (error_info, results_dict) """
     runtime_info = get_userbot_runtime_info(phone)
-    if not runtime_info: return {"error": "Userbot runtime not available."}, {}
+    if not runtime_info: return {"error": "Userbot runtime unavailable."}, {}
     client, loop, lock = runtime_info['client'], runtime_info['loop'], runtime_info['lock']; bot_display = phone
 
     async def _join_batch_task():
@@ -382,19 +220,25 @@ async def join_groups_batch(phone, urls):
                 log.info(f"{bot_display}: Start join {len(urls)} URLs.")
                 for i, url in enumerate(urls):
                     if not url: continue
-                    status, detail = "failed", "Unknown"; start_time = time.monotonic(); entity = None
+                    status, detail = "failed", "Unknown"; start_t = time.monotonic(); entity = None
                     try:
                         link_type, identifier = parse_telegram_url_simple(url)
                         if link_type == "unknown": raise ValueError("Unrecognized URL")
                         if link_type == "message_link": raise ValueError("Cannot join msg link")
 
-                        if link_type == "private_join": log.info(f"{bot_display}: Join invite: {identifier}"); updates = await client(ImportChatInviteRequest(identifier));
-                        if updates and updates.chats: entity = updates.chats[0]; status, detail = "success", _format_entity_detail(entity)
-                        else: raise InviteHashInvalidError("Import empty.")
-                        elif link_type == "public": log.info(f"{bot_display}: Resolve public: {identifier}"); entity = await client.get_entity(identifier);
-                        if not isinstance(entity, (Channel, TelethonChat)): raise ValueError("Link->user")
-                        log.info(f"{bot_display}: Join public: {getattr(entity,'title','N/A')}"); await client(JoinChannelRequest(entity)); status, detail = "success", _format_entity_detail(entity)
-                        else: raise ValueError("Unsupported link type")
+                        if link_type == "private_join":
+                            log.info(f"{bot_display}: Join invite: {identifier}"); updates = await client(ImportChatInviteRequest(identifier));
+                            if updates and updates.chats: entity = updates.chats[0]; status, detail = "success", _format_entity_detail(entity)
+                            else: raise InviteHashInvalidError("Import empty.")
+                        elif link_type == "public":
+                            log.info(f"{bot_display}: Resolve public: {identifier}") # Semicolon removed
+                            entity = await client.get_entity(identifier) # Semicolon removed
+                            if not isinstance(entity, (Channel, TelethonChat)): raise ValueError("Link points to user.") # Added check
+                            log.info(f"{bot_display}: Joining public: {getattr(entity,'title','N/A')}") # Semicolon removed
+                            await client(JoinChannelRequest(entity)) # Semicolon removed
+                            status, detail = "success", _format_entity_detail(entity) # Semicolon removed
+                        else: raise ValueError("Unsupported link type") # Semicolon removed
+
                     except (InviteHashExpiredError, InviteHashInvalidError): status, detail = "failed", {"reason": "invalid_invite"}
                     except ChannelPrivateError: status, detail = "failed", {"reason": "private"}
                     except ChatWriteForbiddenError: status, detail = "failed", {"reason": "banned_or_restricted"}; log.warning(f"{bot_display}: ChatWriteForbidden {url}")
@@ -405,25 +249,23 @@ async def join_groups_batch(phone, urls):
                     except (AuthKeyError, ConnectionError, asyncio.TimeoutError, OSError) as e: log.error(f"{bot_display}: Conn/Auth err join {url}: {e}. Abort."); db.update_userbot_status(phone, 'error', f"Conn/Auth Err: {type(e).__name__}"); raise ConnectionError(f"Conn/Auth fail: {e}")
                     except UserDeactivatedBanError as e: log.critical(f"{bot_display}: BANNED join {url}: {e}. Abort."); db.update_userbot_status(phone, 'error', "Account Banned"); raise e
                     except Exception as e: log.exception(f"{bot_display}: Unexpected err join {url}: {e}"); status, detail = "failed", {"reason": f"internal_error: {e}"}
-                    results[url] = (status, detail); log.info(f"{bot_display}: Result {url}: {status} ({(time.monotonic()-start_time):.2f}s)")
+                    results[url] = (status, detail); log.info(f"{bot_display}: Result {url}: {status} ({(time.monotonic()-start_t):.2f}s)")
                     if i < len(urls) - 1: delay = max(0.5, 3.0 + random.uniform(-1.0, 1.0)); await asyncio.sleep(delay)
             except ConnectionError as e: return {"error": f"Connection Error: {e}"}, results
             except UserDeactivatedBanError as e: return {"error": "Userbot Account Banned/Deactivated"}, results
             except Exception as e: log.exception(f"{bot_display}: Error in _join_batch_task: {e}"); return {"error": f"Batch Error: {e}"}, results
-            log.info(f"{bot_display}: Finished join batch task."); return {}, results
+            log.info(f"{bot_display}: Finished join batch task."); return {}, results # No fatal error
     if not loop or loop.is_closed(): return {"error": "Userbot event loop unavailable."}, {}
     future = asyncio.run_coroutine_threadsafe(_join_batch_task(), loop)
     try: timeout = (len(urls) * (CLIENT_TIMEOUT / 2 + 5)) + 30; error_info, results_dict = future.result(timeout=timeout); return error_info, results_dict
     except asyncio.TimeoutError: log.error(f"Timeout join batch {phone}."); final_results = locals().get('results_dict', {}); [final_results.setdefault(url, ("failed", {"reason": "batch_timeout"})) for url in urls if url not in final_results]; return {"error": "Batch join timeout."}, final_results
-    except Exception as e: log.exception(f"Error join batch future {phone}: {e}"); final_results = locals().get('results_dict', {}); [final_results.setdefault(url, ("failed", {"reason": f"internal_error: {e}"})) for url in urls if url not in final_results]; error_info = {"error": str(e)} if not locals().get('error_info') else locals()['error_info']; return error_info, final_results
+    except Exception as e: log.exception(f"Error join batch future {phone}: {e}"); final_results = locals().get('results_dict', {}); [final_results.setdefault(url, ("failed", {"reason": f"internal_error: {e}"})) for url in urls if url not in final_results]; error_info = {"error": str(e)} if 'error_info' not in locals() else locals()['error_info']; return error_info, final_results
 
 # --- Get Joined Groups ---
 async def get_joined_chats_telethon(phone):
-    """Retrieves joined chats (groups/channels) for a userbot."""
     runtime_info = get_userbot_runtime_info(phone)
     if not runtime_info: return None, {"error": "Userbot runtime not available."}
     client, loop, lock = runtime_info['client'], runtime_info['loop'], runtime_info['lock']; bot_display = phone
-
     async def _get_dialogs_task():
         dialog_list = []; error_msg = None; nonlocal bot_display
         async with lock:
@@ -455,17 +297,14 @@ async def get_joined_chats_telethon(phone):
 
 # --- Message Link Parsing ---
 async def get_message_entity_by_link(client, link):
-    """Parses message links and returns (source_chat_entity, message_id). Raises errors."""
     link = link.strip(); log.debug(f"Parsing message link: {link}")
     private_match = re.match(r'https?://t\.me/c/(\d+)/(\d+)', link)
     public_match = re.match(r'https?://t\.me/([\w\d_]+)/(\d+)', link)
     chat_identifier = None; message_id = None; link_type = 'unknown'
-
     if private_match: link_type = 'private'; chat_identifier = int(f"-100{private_match.group(1)}"); message_id = int(private_match.group(2))
     elif public_match: link_type = 'public'; chat_identifier = public_match.group(1); message_id = int(public_match.group(2))
     else: raise ValueError("Invalid message link format.")
     log.debug(f"Parsed link: Type={link_type}, Identifier='{chat_identifier}', MsgID={message_id}")
-
     try:
         if not client.is_connected(): raise ConnectionError("Client not connected")
         chat_entity = await client.get_entity(chat_identifier)
@@ -475,11 +314,10 @@ async def get_message_entity_by_link(client, link):
         return chat_entity, message_id
     except MessageIdInvalidError as e: log.error(f"MsgID invalid link {link}: {e}"); raise ValueError(f"Message ID {message_id} invalid.") from e
     except (ValueError, TypeError) as e: log.error(f"Entity resolve error link {link}: {e}"); raise ValueError(f"Could not resolve source chat: {e}") from e
-    except ConnectionError as e: log.error(f"Connection error resolving link {link}: {e}"); raise # Re-raise connection errors
+    except ConnectionError as e: log.error(f"Connection error resolving link {link}: {e}"); raise
 
 # --- Forwarding Logic ---
 async def _forward_single_message(client, target_peer, source_chat_entity, message_id, fallback_chat_entity=None, fallback_message_id=None):
-    """Forwards single message, handles errors, returns (bool_success, error_msg_or_None)."""
     phone = getattr(client.session.auth_key, 'phone', 'Unknown'); target_id = getattr(target_peer, 'id', str(target_peer))
     log.debug(f"[{phone}] Attempt FWD -> Target={target_id} from Chat={source_chat_entity.id}/Msg={message_id}")
     ok, err_reason = False, None
@@ -503,7 +341,6 @@ async def _forward_single_message(client, target_peer, source_chat_entity, messa
 
 # --- Main Task Execution Logic ---
 async def _execute_single_task(instance, task_info):
-    """Core logic for executing one forwarding task."""
     client = instance["client"]; lock = instance["lock"]; phone = task_info['userbot_phone']; client_id = task_info['client_id']
     run_ts = int(datetime.now(UTC_TZ).timestamp()); log.info(f"[{phone}] Task trigger client {client_id}. Lock...")
     success_count, target_count, final_err = 0, 0, None
@@ -511,7 +348,6 @@ async def _execute_single_task(instance, task_info):
         async with lock:
             log.info(f"[{phone}] Lock acquire. Task execute.")
             if not await _safe_connect(client, phone): raise ConnectionError("Task connect fail.")
-
             primary_link = task_info['message_link']; fallback_link = task_info['fallback_message_link']
             try: source_chat, source_msg_id = await get_message_entity_by_link(client, primary_link); log.info(f"[{phone}] Primary msg ok.")
             except (ValueError, MessageIdInvalidError) as e: raise ValueError(f"Primary link fail '{primary_link}': {e}") from e
@@ -519,7 +355,6 @@ async def _execute_single_task(instance, task_info):
             if fallback_link:
                 try: fb_chat, fb_msg_id = await get_message_entity_by_link(client, fallback_link); log.info(f"[{phone}] Fallback msg ok.")
                 except Exception as fb_err: log.warning(f"[{phone}] Fallback link resolve fail '{fallback_link}', skip: {fb_err}")
-
             target_ids = []; folder_name = "N/A"
             if task_info['send_to_all_groups']:
                 log.info(f"[{phone}] Target: All groups..."); dialogs, err_info = await get_joined_chats_telethon(phone)
@@ -529,7 +364,6 @@ async def _execute_single_task(instance, task_info):
                 folder_id = task_info['folder_id']
                 if folder_id: folder_name = db.get_folder_name(folder_id) or f"ID {folder_id}"; log.info(f"[{phone}] Target: Folder '{folder_name}'"); target_ids = db.get_target_groups_by_folder(folder_id); log.info(f"[{phone}] Target {len(target_ids)} DB groups.")
                 else: raise ValueError("Task config error: No target.")
-
             target_count = len(target_ids)
             if target_count == 0: log.warning(f"[{phone}] No target groups for task. Finish.")
             else:
@@ -557,7 +391,6 @@ async def _execute_single_task(instance, task_info):
 
 # --- Background Task Scheduler ---
 async def run_check_tasks_periodically():
-    """Periodically checks DB for due tasks and schedules them."""
     log.info("Background task checker service started."); await asyncio.sleep(15)
     while not _stop_event.is_set():
         start_t = datetime.now(UTC_TZ); log.info(f"Task Check Cycle Start: {start_t.isoformat()}"); current_ts = int(start_t.timestamp()); scheduled = 0
@@ -578,7 +411,6 @@ async def run_check_tasks_periodically():
 
 # --- Initialization and Shutdown ---
 def initialize_all_userbots():
-    """Initializes runtime for all potentially active bots on startup."""
     log.info("Initializing userbot runtimes..."); all_bots = db.get_all_userbots(); init_count = 0
     for bot in all_bots:
         if bot['status'] != 'inactive': phone = bot['phone_number']; log.debug(f"Init runtime {phone} (Status: {bot['status']})..."); info = get_userbot_runtime_info(phone);
@@ -586,7 +418,6 @@ def initialize_all_userbots():
     log.info(f"Finished runtime init. Attempted/Verified {init_count} runtimes.")
 
 def shutdown_telethon():
-    """Signals tasks to stop and disconnects userbots."""
     log.info("Initiating Telethon shutdown..."); _stop_event.set()
     with _userbots_lock: phones = list(_userbots.keys()); log.info(f"Stopping {len(phones)} userbot runtimes...")
     if not phones: log.info("No active runtimes."); return
