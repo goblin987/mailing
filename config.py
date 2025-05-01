@@ -67,20 +67,9 @@ DATA_DIR = os.path.abspath(DATA_DIR_BASE)
 DB_PATH = os.path.join(DATA_DIR, DB_FILENAME)
 SESSION_DIR = os.path.join(DATA_DIR, SESSION_SUBDIR)
 
-# Ensure directories exist
-try:
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-        print(f"Created data directory: {DATA_DIR}")
-    if not os.path.exists(SESSION_DIR):
-        os.makedirs(SESSION_DIR)
-        print(f"Created session directory: {SESSION_DIR}")
-except OSError as e:
-    print(f"CRITICAL: Error creating data directories in '{DATA_DIR}': {e}")
-    sys.exit(1)
-
 
 # --- Environment Variable Loading & Validation ---
+# Defined early so logging setup can use it if needed
 def load_env_var(name, required=True, cast=str, default=None):
     """Loads an environment variable, raises ValueError if required and missing."""
     value = os.environ.get(name)
@@ -103,15 +92,16 @@ try:
     # Ensure IDs are integers and handle potential whitespace
     ADMIN_IDS = [int(id_.strip()) for id_ in admin_ids_str.split(',') if id_.strip()]
 except ValueError as e:
-    print(f"CRITICAL: Configuration Error - {e}")
+    # Use basic print here as logging might not be fully configured yet
+    print(f"CRITICAL: Configuration Error loading environment variables - {e}")
     sys.exit(1)
-
 
 # --- Logging Setup ---
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] - %(message)s')
 log_file_path = os.path.join(DATA_DIR, LOG_FILENAME)
 
 # File Handler (optional but recommended for persistence beyond Render's console log limits)
+file_handler = None
 try:
     # Use RotatingFileHandler to prevent logs from growing indefinitely
     file_handler = logging.handlers.RotatingFileHandler(
@@ -120,6 +110,7 @@ try:
     file_handler.setFormatter(log_formatter)
     file_handler.setLevel(logging.INFO) # Log INFO level and above to file
 except PermissionError:
+     # Logging not set up yet, use print
      print(f"Warning: Permission denied writing log file to {log_file_path}. File logging disabled.")
      file_handler = None
 except Exception as e:
@@ -142,7 +133,41 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__) # Use this logger in other modules: from config import log
 
-# Log basic config info on startup
+# --- Ensure Data Directories Exist (AFTER Logging is setup) ---
+try:
+    # DATA_DIR (/data on Render) must already exist as the mount point provided by Render.
+    if not os.path.isdir(DATA_DIR):
+        log.critical(f"CRITICAL: Data directory '{DATA_DIR}' does not exist or is not a directory! Check Render disk mount and RENDER_DISK_PATH env var.")
+        sys.exit(1)
+
+    # Explicitly create the 'sessions' subdirectory if it doesn't exist.
+    if not os.path.exists(SESSION_DIR):
+        log.info(f"Session directory '{SESSION_DIR}' not found. Attempting to create...")
+        os.makedirs(SESSION_DIR) # This was the line failing before
+        log.info(f"Created session directory: {SESSION_DIR}")
+    elif not os.path.isdir(SESSION_DIR):
+         # Handle case where SESSION_DIR exists but is a file
+         log.critical(f"CRITICAL: Path '{SESSION_DIR}' exists but is not a directory!")
+         sys.exit(1)
+    else:
+        log.info(f"Session directory '{SESSION_DIR}' already exists.")
+
+    # Optional: Check writability - maybe less critical if makedirs worked
+    if not os.access(SESSION_DIR, os.W_OK):
+         log.warning(f"Session directory '{SESSION_DIR}' might not be writable! Session file creation may fail.")
+    if not os.access(DATA_DIR, os.W_OK):
+         log.warning(f"Data directory '{DATA_DIR}' might not be writable! Database file creation/write may fail.")
+
+except OSError as e:
+    # If os.makedirs(SESSION_DIR) fails with Permission Denied here, it's definitely a disk permission issue.
+    log.critical(f"CRITICAL: OSError ensuring directory '{SESSION_DIR}' exists/writable: {e}", exc_info=True)
+    sys.exit(1)
+except Exception as e:
+    # Catch any other unexpected errors during setup
+    log.critical(f"CRITICAL: Unexpected error setting up directories: {e}", exc_info=True)
+    sys.exit(1)
+
+# Log basic config info AFTER directory setup and logging is confirmed working
 log.info("--- Bot Starting ---")
 log.info(f"Data Directory: {DATA_DIR}")
 log.info(f"Session Directory: {SESSION_DIR}")
