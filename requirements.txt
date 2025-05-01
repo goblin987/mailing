@@ -1,0 +1,16 @@
+# requirements.txt
+
+# Core Telegram Bot Framework
+python-telegram-bot==13.15
+
+# Telegram Client Library (Userbot)
+telethon==1.36.0
+
+# Timezone handling
+pytz==2024.1
+
+# File type detection (for imghdr shim)
+filetype==1.2.0
+
+# Loading .env files for local development
+python-dotenv==1.0.1
