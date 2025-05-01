@@ -1,4 +1,3 @@
-# handlers.py
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -34,8 +33,7 @@ from config import (
     STATE_WAITING_FOR_FOLDER_ACTION, STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK,
     STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK, STATE_FOLDER_EDIT_REMOVE_SELECT,
     STATE_FOLDER_RENAME_PROMPT, STATE_ADMIN_CONFIRM_USERBOT_RESET,
-    STATE_WAITING_FOR_START_TIME, # Ensure this one that caused error is included
-    # Add any other state constants if they were defined in config.py
+    STATE_WAITING_FOR_START_TIME, # Ensure this one is included
 
     # Callback Prefixes
     CALLBACK_ADMIN_PREFIX, CALLBACK_CLIENT_PREFIX, CALLBACK_TASK_PREFIX,
@@ -66,6 +64,11 @@ CTX_TASK_SETTINGS = "task_settings"
 
 def clear_conversation_data(context: CallbackContext):
     """Clears sensitive or state-specific keys from user_data."""
+    # ** FIX HERE: Check if user_data exists **
+    if not context.user_data:
+         log.debug("Skipping clear_conversation_data: context.user_data is None.")
+         return
+
     keys_to_clear = [
         CTX_PHONE, CTX_API_ID, CTX_API_HASH, CTX_AUTH_DATA, CTX_INVITE_DETAILS,
         CTX_EXTEND_CODE, CTX_ADD_BOTS_CODE, CTX_FOLDER_ID, CTX_FOLDER_NAME,
@@ -75,6 +78,7 @@ def clear_conversation_data(context: CallbackContext):
     user_id = context.user_data.get(CTX_USER_ID, 'N/A') # Keep user_id and lang
     lang = context.user_data.get(CTX_LANG, 'en')
     context.user_data.clear()
+    # Restore persistent context data if needed
     context.user_data[CTX_USER_ID] = user_id
     context.user_data[CTX_LANG] = lang
     log.debug(f"Cleared volatile conversation user_data for user {user_id}")
@@ -86,12 +90,12 @@ def get_user_id_and_lang(update: Update, context: CallbackContext) -> tuple:
      if not user_id and update.effective_user:
           user_id = update.effective_user.id
           context.user_data[CTX_USER_ID] = user_id
+     # Fetch language only if we have a user ID and lang is not already cached
      if user_id and not lang:
-          # Fetch from DB only if not in context cache
           lang = db.get_user_language(user_id)
           context.user_data[CTX_LANG] = lang
      elif not lang:
-          lang = 'en' # Default if no user_id either
+          lang = 'en' # Default if no user_id found or DB error
      return user_id, lang
 
 def reply_or_edit_text(update: Update, context: CallbackContext, text: str, **kwargs):
@@ -113,46 +117,44 @@ def reply_or_edit_text(update: Update, context: CallbackContext, text: str, **kw
           elif update.message:
                update.message.reply_text(text=text, **kwargs)
           else:
-               # Handle updates without message/callback_query (e.g., maybe Poll?)
                log.warning(f"Cannot reply_or_edit_text for update type: {type(update)}. Sending new message.")
                if user_id: context.bot.send_message(chat_id=user_id, text=text, **kwargs)
      except BadRequest as e:
-          # Ignore "message is not modified" error
           if "message is not modified" in str(e).lower():
                log.debug(f"Ignoring 'message is not modified' error for user {user_id}.")
-               # Still try answering callback if it's relevant and wasn't answered
                if update.callback_query and not answered_callback:
                     try: update.callback_query.answer()
                     except: pass
-          # Handle other common edit errors
           elif "message to edit not found" in str(e).lower() or "chat not found" in str(e).lower():
-                log.warning(f"Failed to edit message for user {user_id} (maybe deleted or wrong chat): {e}")
-                # Try sending as a new message instead
+                log.warning(f"Failed to edit message for user {user_id} (maybe deleted): {e}")
                 if user_id: context.bot.send_message(chat_id=user_id, text=text, **kwargs)
           else:
-                # Log other BadRequest errors
                 log.error(f"BadRequest sending/editing message for user {user_id}: {e}", exc_info=True)
-                # Try sending generic error message
                 if user_id:
                     try: context.bot.send_message(chat_id=user_id, text=get_text(user_id, 'error_generic', lang=lang), parse_mode=parse_mode)
                     except Exception as send_e: log.error(f"Failed to send fallback error msg to user {user_id}: {send_e}")
      except Exception as e:
-          # Catch-all for other unexpected errors
           log.error(f"Unexpected error in reply_or_edit_text for user {user_id}: {e}", exc_info=True)
           if user_id:
                try: context.bot.send_message(chat_id=user_id, text=get_text(user_id, 'error_generic', lang=lang), parse_mode=parse_mode)
                except Exception as send_e: log.error(f"Failed to send fallback error msg after unexpected error to user {user_id}: {send_e}")
 
+
 # --- PTB Generic Error Handler ---
 def error_handler(update: object, context: CallbackContext) -> None:
     """Log Errors caused by Updates and notify user."""
+    # Log the error before attempting anything else
     log.error(f"Exception while handling an update:", exc_info=context.error)
-    if isinstance(update, Update) and update.effective_message:
+
+    # Attempt to notify the user only if the update context is available
+    if isinstance(update, Update) and update.effective_user:
         user_id, lang = get_user_id_and_lang(update, context)
-        # Avoid sending error message if the error itself was during sending
-        # if not isinstance(context.error, (telegram.error.NetworkError, telegram.error.ChatMigrated, telegram.error.TimedOut)):
-        reply_or_edit_text(update, context, get_text(user_id, 'error_generic', lang=lang))
-    clear_conversation_data(context) # Clear state on any error
+        if user_id: # Ensure we have a user ID to reply to
+            reply_or_edit_text(update, context, get_text(user_id, 'error_generic', lang=lang))
+
+    # Always clear conversation data after logging the error (if user_data exists)
+    clear_conversation_data(context)
+
 
 # --- Format Timestamp Helper ---
 def format_dt(timestamp: int, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> str:
@@ -181,7 +183,7 @@ def build_client_menu(user_id, context: CallbackContext):
     bot_count = len(userbot_phones)
     parse_mode = ParseMode.HTML # Using HTML for easier formatting
 
-    menu_text = f"<b>{get_text(user_id, 'client_menu_title', lang=lang, code=code)}</b>\n"
+    menu_text = f"<b>{get_text(user_id, 'client_menu_title', lang=lang, code=code)}</b>\n" # Example usage of code
     menu_text += get_text(user_id, 'client_menu_sub_end', lang=lang, end_date=end_date) + "\n\n"
     menu_text += f"<u>{get_text(user_id, 'client_menu_userbots_title', lang=lang, count=bot_count)}</u>\n"
 
@@ -192,7 +194,6 @@ def build_client_menu(user_id, context: CallbackContext):
             status = bot_db_info['status'].capitalize() if bot_db_info else 'Unknown'
             last_error = bot_db_info['last_error'] if bot_db_info else None
             display_name = f"@{username}" if username else phone
-            # Define status icons based on the bot's state
             status_icon = "🟢" if bot_db_info and bot_db_info['status'] == 'active' else \
                           "🟡" if bot_db_info and bot_db_info['status'] not in ['active', 'inactive', 'error'] else \
                           "🔴" if bot_db_info and bot_db_info['status'] == 'error' else "⚪️"
@@ -222,7 +223,7 @@ def build_client_menu(user_id, context: CallbackContext):
 def build_admin_menu(user_id, context: CallbackContext):
     """Builds the admin menu message and keyboard."""
     lang = context.user_data.get(CTX_LANG, 'en')
-    title = f"<b>{get_text(user_id, 'admin_panel_title', lang=lang)}</b>" # Use HTML bold
+    title = f"<b>{get_text(user_id, 'admin_panel_title', lang=lang)}</b>"
     parse_mode = ParseMode.HTML
     keyboard = [
         [
@@ -296,7 +297,7 @@ def cancel_command(update: Update, context: CallbackContext) -> int:
     """Generic cancel handler."""
     user_id, lang = get_user_id_and_lang(update, context)
     log.info(f"Cancel cmd: UserID={user_id}")
-    reply_or_edit_text(update, context, get_text(user_id, 'cancelled', lang=lang)) # Edit if callback, reply if msg
+    reply_or_edit_text(update, context, get_text(user_id, 'cancelled', lang=lang))
     clear_conversation_data(context)
     return ConversationHandler.END
 
@@ -304,7 +305,8 @@ def conversation_fallback(update: Update, context: CallbackContext) -> int:
      """Handles messages not matched in a conversation state."""
      user_id, lang = get_user_id_and_lang(update, context)
      state = context.user_data.get(ConversationHandler.CURRENT_STATE)
-     log.warning(f"Conv fallback: UserID={user_id}. State={state}. Msg='{update.message.text[:50] if update.message and update.message.text else 'Non-text Msg'}...'")
+     msg_text = update.effective_message.text if update.effective_message else 'Non-text update'
+     log.warning(f"Conv fallback: UserID={user_id}. State={state}. Msg='{msg_text[:50]}...'")
      reply_or_edit_text(update, context, get_text(user_id, 'conversation_fallback', lang=lang))
      clear_conversation_data(context)
      return ConversationHandler.END
@@ -313,11 +315,9 @@ def conversation_fallback(update: Update, context: CallbackContext) -> int:
 def client_menu(update: Update, context: CallbackContext) -> int:
     """Builds and sends the main client menu."""
     user_id, lang = get_user_id_and_lang(update, context)
-    # Corrected: Answer callback properly within reply_or_edit_text or here
     if update.callback_query:
-        try:
-            update.callback_query.answer()
-        except BadRequest: pass # Ignore if already answered
+        try: update.callback_query.answer()
+        except BadRequest: pass
     message, markup, parse_mode = build_client_menu(user_id, context)
     reply_or_edit_text(update, context, message, reply_markup=markup, parse_mode=parse_mode)
     clear_conversation_data(context)
@@ -335,7 +335,7 @@ def client_ask_select_language(update: Update, context: CallbackContext):
     buttons.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")])
     markup = InlineKeyboardMarkup(buttons)
     reply_or_edit_text(update, context, get_text(user_id, 'select_language', lang=lang), reply_markup=markup)
-    return ConversationHandler.END # Stateless selection
+    return ConversationHandler.END
 
 def set_language_handler(update: Update, context: CallbackContext):
     """Handles language selection callback."""
@@ -347,13 +347,13 @@ def set_language_handler(update: Update, context: CallbackContext):
     if lang_code not in language_names: query.answer("Invalid selection", show_alert=True); return ConversationHandler.END
 
     if db.set_user_language(user_id, lang_code):
-         context.user_data[CTX_LANG] = lang_code # Update cache
-         lang = lang_code # Use new language for confirmation message
+         context.user_data[CTX_LANG] = lang_code
+         lang = lang_code
          reply_or_edit_text(
              update, context, get_text(user_id, 'language_set', lang=lang, lang_name=language_names[lang_code]),
              reply_markup=InlineKeyboardMarkup([[ InlineKeyboardButton(get_text(user_id, 'button_main_menu', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")]])
          )
-    else: query.answer(get_text(user_id, 'language_set_error', lang=current_lang), show_alert=True) # Use old lang for error
+    else: query.answer(get_text(user_id, 'language_set_error', lang=current_lang), show_alert=True)
     return ConversationHandler.END
 
 # --- Admin Userbot Add Flow (Implemented) ---
@@ -382,11 +382,11 @@ def process_admin_api_id(update: Update, context: CallbackContext) -> str | int:
 
 def process_admin_api_hash(update: Update, context: CallbackContext) -> str | int:
     user_id, lang = get_user_id_and_lang(update, context); api_hash = update.message.text.strip()
-    if not api_hash or len(api_hash) < 20: reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_invalid_api_hash', lang=lang)); return STATE_WAITING_FOR_API_HASH
+    if not api_hash or len(api_hash) < 30 or not re.match('^[a-fA-F0-9]+$', api_hash): # Slightly stricter hash check
+        reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_invalid_api_hash', lang=lang)); return STATE_WAITING_FOR_API_HASH
     context.user_data[CTX_API_HASH] = api_hash; phone = context.user_data[CTX_PHONE]; api_id = context.user_data[CTX_API_ID]
     log.info(f"Admin {user_id} API Hash OK for {phone}. Start auth."); reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_auth_connecting', lang=lang, phone=phone))
     try:
-        # Use asyncio.run to block until async auth start completes
         auth_status, auth_data = asyncio.run(telethon_api.start_authentication_flow(phone, api_id, api_hash))
         log.info(f"Auth start result {phone}: {auth_status}")
         if auth_status == 'code_needed':
@@ -397,13 +397,13 @@ def process_admin_api_hash(update: Update, context: CallbackContext) -> str | in
             bot_info = db.find_userbot(phone); display = f"@{bot_info['username']}" if bot_info and bot_info['username'] else phone
             reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_already_auth', lang=lang, display_name=display)); telethon_api.get_userbot_runtime_info(phone); clear_conversation_data(context); return ConversationHandler.END
         else: # Error case
-            error_msg = auth_data.get('error_message', 'Unknown error');
-            if "flood wait" in error_msg.lower(): wait = re.search(r'\d+', error_msg); secs = wait.group(0) if wait else '?'; key = 'admin_userbot_auth_error_flood'
+            error_msg = auth_data.get('error_message', 'Unknown error'); locals_for_format = {'phone': phone, 'error': error_msg}
+            if "flood wait" in error_msg.lower(): wait = re.search(r'\d+', error_msg); locals_for_format['seconds'] = wait.group(0) if wait else '?'; key = 'admin_userbot_auth_error_flood'
             elif "config" in error_msg.lower() or "invalid api" in error_msg.lower(): key = 'admin_userbot_auth_error_config'
             elif "invalid phone" in error_msg.lower(): key = 'admin_userbot_auth_error_phone_invalid'
             elif "connection" in error_msg.lower(): key = 'admin_userbot_auth_error_connect'
             else: key = 'admin_userbot_auth_error_unknown'
-            reply_or_edit_text(update, context, get_text(user_id, key, lang=lang, phone=phone, error=error_msg, seconds=locals().get('secs','?'))); clear_conversation_data(context); return ConversationHandler.END
+            reply_or_edit_text(update, context, get_text(user_id, key, lang=lang, **locals_for_format)); clear_conversation_data(context); return ConversationHandler.END
     except Exception as e: log.error(f"Error running start_auth {phone}: {e}", exc_info=True); reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); clear_conversation_data(context); return ConversationHandler.END
 
 def process_admin_userbot_code(update: Update, context: CallbackContext) -> str | int:
@@ -419,13 +419,13 @@ def process_admin_userbot_code(update: Update, context: CallbackContext) -> str 
         elif comp_status == 'error' and "Password required" in comp_data.get('error_message',''):
              log.warning(f"Password needed unexpectedly code {phone}. Restart."); reply_or_edit_text(update, context, "Password required. Start over."); clear_conversation_data(context); return ConversationHandler.END
         else:
-             error_msg = comp_data.get('error_message', 'Unknown error.')
+             error_msg = comp_data.get('error_message', 'Unknown error.'); locals_for_format = {'phone': phone, 'error': error_msg}
              if "invalid or expired code" in error_msg.lower(): key = 'admin_userbot_auth_error_code_invalid'
-             elif "flood wait" in error_msg.lower(): key = 'admin_userbot_auth_error_flood'; wait = re.search(r'\d+', error_msg); secs = wait.group(0) if wait else '?'
+             elif "flood wait" in error_msg.lower(): key = 'admin_userbot_auth_error_flood'; wait = re.search(r'\d+', error_msg); locals_for_format['seconds'] = wait.group(0) if wait else '?'
              elif "banned" in error_msg.lower() or "deactivated" in error_msg.lower(): key = 'admin_userbot_auth_error_account_issue'
              elif "connection" in error_msg.lower(): key = 'admin_userbot_auth_error_connect'
              else: key = 'admin_userbot_auth_error_unknown'
-             reply_or_edit_text(update, context, get_text(user_id, key, lang=lang, phone=phone, error=error_msg, seconds=locals().get('secs','?'))); clear_conversation_data(context); return ConversationHandler.END
+             reply_or_edit_text(update, context, get_text(user_id, key, lang=lang, **locals_for_format)); clear_conversation_data(context); return ConversationHandler.END
     except Exception as e: log.error(f"Error running complete_auth (code) {phone}: {e}", exc_info=True); reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); context.user_data.pop(CTX_AUTH_DATA, None); clear_conversation_data(context); return ConversationHandler.END
 
 def process_admin_userbot_password(update: Update, context: CallbackContext) -> str | int:
@@ -439,13 +439,13 @@ def process_admin_userbot_password(update: Update, context: CallbackContext) -> 
         if comp_status == 'success':
             phone_num = comp_data.get('phone', phone); display = f"@{comp_data['username']}" if comp_data.get('username') else phone_num; reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_add_success', lang=lang, display_name=display)); clear_conversation_data(context); return ConversationHandler.END
         else:
-            error_msg = comp_data.get('error_message', 'Unknown error.')
+            error_msg = comp_data.get('error_message', 'Unknown error.'); locals_for_format = {'phone': phone, 'error': error_msg}
             if "incorrect password" in error_msg.lower(): key = 'admin_userbot_auth_error_password_invalid'
-            elif "flood wait" in error_msg.lower(): key = 'admin_userbot_auth_error_flood'; wait = re.search(r'\d+', error_msg); secs = wait.group(0) if wait else '?'
+            elif "flood wait" in error_msg.lower(): key = 'admin_userbot_auth_error_flood'; wait = re.search(r'\d+', error_msg); locals_for_format['seconds'] = wait.group(0) if wait else '?'
             elif "banned" in error_msg.lower() or "deactivated" in error_msg.lower(): key = 'admin_userbot_auth_error_account_issue'
             elif "connection" in error_msg.lower(): key = 'admin_userbot_auth_error_connect'
             else: key = 'admin_userbot_auth_error_unknown'
-            reply_or_edit_text(update, context, get_text(user_id, key, lang=lang, phone=phone, error=error_msg, seconds=locals().get('secs','?'))); clear_conversation_data(context); return ConversationHandler.END
+            reply_or_edit_text(update, context, get_text(user_id, key, lang=lang, **locals_for_format)); clear_conversation_data(context); return ConversationHandler.END
     except Exception as e: log.error(f"Error running complete_auth (pass) {phone}: {e}", exc_info=True); reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); context.user_data.pop(CTX_AUTH_DATA, None); clear_conversation_data(context); return ConversationHandler.END
 
 
@@ -453,8 +453,8 @@ def process_admin_userbot_password(update: Update, context: CallbackContext) -> 
 def not_implemented_stub(update: Update, context: CallbackContext) -> int:
     """Placeholder for unimplemented handlers."""
     user_id, lang = get_user_id_and_lang(update, context)
-    msg = update.effective_message.text if update.effective_message else 'Callback'
-    log.warning(f"Stub hit: User={user_id}, Update={msg[:50]}...")
+    msg_or_cb = update.effective_message.text[:50] if update.effective_message else f"Callback:{update.callback_query.data}"
+    log.warning(f"Stub hit: User={user_id}, Update={msg_or_cb}...")
     reply_or_edit_text(update, context, get_text(user_id, 'not_implemented', lang=lang))
     clear_conversation_data(context); return ConversationHandler.END
 
@@ -498,12 +498,18 @@ def task_select_folder_for_target(update: Update, context: CallbackContext): ret
 def handle_interval_callback(update: Update, context: CallbackContext): return not_implemented_stub(update, context)
 def handle_userbot_selection_for_join(update: Update, context: CallbackContext): return not_implemented_stub(update, context)
 
+# Helper to build simple back button markup for task setup
+def task_back_button_markup(user_id, context):
+    lang = context.user_data.get(CTX_LANG, 'en')
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_task_menu")
+    ]])
 
 # --- Callback Routers ---
 def handle_client_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
     client_info = db.find_client_by_user_id(user_id)
-    if not client_info or client_info['subscription_end'] < int(datetime.now(UTC_TZ).timestamp()): query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True); return ConversationHandler.END
+    if not client_info or client_info['subscription_end'] < int(datetime.now(UTC_TZ).timestamp()): return ConversationHandler.END # Exit silently if expired
     action = data.split(CALLBACK_CLIENT_PREFIX)[1]
     if action == "setup_tasks": return client_select_bot_for_task(update, context)
     elif action == "manage_folders": return client_folder_menu(update, context)
@@ -511,13 +517,14 @@ def handle_client_callback(update: Update, context: CallbackContext) -> str | in
     elif action == "view_joined": return client_select_bot_for_view_joined(update, context)
     elif action == "view_logs": return client_show_stats(update, context)
     elif action == "language": return client_ask_select_language(update, context)
-    elif action == "back_to_menu": return client_menu(update, context) # Answered in client_menu now
+    elif action == "back_to_menu": return client_menu(update, context)
     elif data.startswith(CALLBACK_CLIENT_PREFIX + "view_joined_"): return client_view_joined_groups(update, context)
-    else: log.warning(f"Unhandled CLIENT CB: '{action}'"); query.answer(get_text(user_id, 'not_implemented', lang=lang)); return None
+    else: log.warning(f"Unhandled CLIENT CB: '{action}'")
+    return None # Return None if action is handled by stub for now
 
 def handle_admin_callback(update: Update, context: CallbackContext) -> str | int | None:
      query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-     if not is_admin(user_id): query.answer(get_text(user_id, 'unauthorized', lang=lang), show_alert=True); return ConversationHandler.END
+     if not is_admin(user_id): return ConversationHandler.END # Exit silently
      data = query.data; action = data.split(CALLBACK_ADMIN_PREFIX)[1]
      if action == "add_bot_prompt": reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_prompt_phone', lang=lang)); return STATE_WAITING_FOR_PHONE
      elif action == "remove_bot_select": return admin_select_userbot_to_remove(update, context)
@@ -528,48 +535,48 @@ def handle_admin_callback(update: Update, context: CallbackContext) -> str | int
      elif action == "assign_bots_prompt": reply_or_edit_text(update, context, get_text(user_id, 'admin_assignbots_prompt_code', lang=lang)); return STATE_WAITING_FOR_ADD_USERBOTS_CODE
      elif action == "view_logs": return admin_view_system_logs(update, context)
      elif data.startswith(CALLBACK_ADMIN_PREFIX + "remove_bot_confirm_"): return admin_remove_userbot_confirmed(update, context)
-     else: log.warning(f"Unhandled ADMIN CB: '{action}'"); query.answer(get_text(user_id, 'not_implemented', lang=lang)); return None
+     else: log.warning(f"Unhandled ADMIN CB: '{action}'")
+     return None
 
-# Placeholder router implementations - THESE NEED TO BE FILLED OUT!
 def handle_folder_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-    log.warning(f"Folder CB hit - STUB: User={user_id}, Data='{query.data}'")
-    return not_implemented_stub(update, context)
+     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
+     log.warning(f"Folder CB STUB: User={user_id}, Data='{query.data}'")
+     return not_implemented_stub(update, context)
 
 def handle_task_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-    log.warning(f"Task CB hit - STUB: User={user_id}, Data='{query.data}'")
-    return not_implemented_stub(update, context)
+     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
+     log.warning(f"Task CB STUB: User={user_id}, Data='{query.data}'")
+     return not_implemented_stub(update, context)
 
 def handle_join_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
     if data.startswith(CALLBACK_JOIN_PREFIX + "select_"): return handle_userbot_selection_for_join(update, context)
-    else: log.warning(f"Unhandled JOIN CB: '{data}'"); query.answer(get_text(user_id, 'not_implemented', lang=lang)); return None
+    else: log.warning(f"Unhandled JOIN CB: '{data}'"); return None
 
 def handle_language_callback(update: Update, context: CallbackContext) -> str | int | None:
      query = update.callback_query; data = query.data
      if data.startswith(CALLBACK_LANG_PREFIX): return set_language_handler(update, context)
-     else: log.warning(f"Unhandled LANG CB: '{data}'"); query.answer("?"); return None
+     else: log.warning(f"Unhandled LANG CB: '{data}'"); return None
 
 def handle_generic_callback(update: Update, context: CallbackContext) -> str | int | None:
      query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
      action = data.split(CALLBACK_GENERIC_PREFIX)[1] if CALLBACK_GENERIC_PREFIX in data else None
-     if action == "cancel": query.answer(get_text(user_id, 'cancelled', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
+     if action == "cancel": clear_conversation_data(context); return ConversationHandler.END
      elif action == "confirm_no":
-        query.answer(get_text(user_id, 'cancelled', lang=lang))
-        if is_admin(user_id): title, markup, parse_mode = build_admin_menu(user_id, context); reply_or_edit_text(update, context, title, reply_markup=markup, parse_mode=parse_mode)
+        # Assuming confirm_no always cancels the current flow and shows relevant menu
+        clear_conversation_data(context)
+        if is_admin(user_id): return admin_command(update, context)
+        # Add check if user is client to return client_menu?
         return ConversationHandler.END
-     else: log.warning(f"Unhandled GENERIC CB: '{action}'"); query.answer("?"); return None
-
+     else: log.warning(f"Unhandled GENERIC CB: '{action}'"); return None
 
 # --- Main Callback Router ---
 def main_callback_handler(update: Update, context: CallbackContext) -> str | int | None:
     """Handles all Inline Keyboard Button presses by routing based on prefix."""
     query = update.callback_query; data = query.data; user_id, lang = get_user_id_and_lang(update, context)
     log.info(f"CB Route: User={user_id}, Data='{data}'")
-    # Answer quickly here - specific handlers can edit message later
-    try: query.answer()
-    except BadRequest: pass
+    try: query.answer() # Answer immediately
+    except BadRequest: pass # Ignore if too old
 
     if data.startswith(CALLBACK_CLIENT_PREFIX): return handle_client_callback(update, context)
     elif data.startswith(CALLBACK_ADMIN_PREFIX): return handle_admin_callback(update, context)
@@ -579,61 +586,45 @@ def main_callback_handler(update: Update, context: CallbackContext) -> str | int
     elif data.startswith(CALLBACK_LANG_PREFIX): return handle_language_callback(update, context)
     elif data.startswith(CALLBACK_INTERVAL_PREFIX): return handle_interval_callback(update, context) # STUB
     elif data.startswith(CALLBACK_GENERIC_PREFIX): return handle_generic_callback(update, context)
-    else: log.warning(f"Unhandled CB prefix: User={user_id}, Data='{data}'"); return None
-
+    else: log.warning(f"Unhandled CB prefix: User={user_id}, Data='{data}'"); return None # Let state persist
 
 # --- Conversation Handler Definition ---
-# Define the states and handlers for different conversation flows
 main_conversation = ConversationHandler(
     entry_points=[
         CommandHandler('start', start_command, filters=Filters.chat_type.private),
         CommandHandler('admin', admin_command, filters=Filters.chat_type.private),
-        # Catch callbacks that might start a conversation flow if not handled by states
-        CallbackQueryHandler(main_callback_handler)
+        CallbackQueryHandler(main_callback_handler) # Handles button presses outside specific states
     ],
     states={
-        # Initial client activation flow
         STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_invitation_code)],
-
-        # Admin Add Userbot flow
         STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_phone)],
         STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_id)],
         STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash)],
         STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_code)],
         STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_password)],
-
-        # Other Admin flows (using stubs for now)
-        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_invite_details)],
-        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_code)],
-        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_days)],
-        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_code)],
-        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_count)],
-
-        # Client flows (routing mainly via callbacks handled by main_callback_handler -> specific callback routers)
+        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_invite_details)], # Stub
+        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_code)], # Stub
+        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_days)], # Stub
+        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_code)], # Stub
+        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_count)], # Stub
         STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_join_group_links)], # Stub for join links / folder update links
+        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_join_group_links)], # Stub
         STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_name)], # Stub
         STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
         STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename)], # Stub
-
-        # Task Setup flows
-        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)], # Handles menu buttons
+        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_primary_link)], # Stub
         STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_fallback_link)], # Stub
         STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_start_time)], # Stub
-        STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler)], # Handles selecting all/folder
-
+        STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler)],
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private),
-        # Fallback for any unhandled message in a conversation state
         MessageHandler(Filters.all & Filters.chat_type.private, conversation_fallback)
     ],
-    # name="main_bot_conversation", # Optional name for persistence
-    persistent=False, # Keep False unless you handle context serialization properly
-    allow_reentry=True # Allow commands like /start or /admin to potentially restart the flow
+    allow_reentry=True
 )
 
 log.info("Handlers module loaded.")
