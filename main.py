@@ -4,20 +4,21 @@ import sys
 import asyncio
 import threading
 
-from telegram.ext import Updater, Dispatcher
+from telegram.ext import Updater, Dispatcher, Handler # Import base Handler for type checking if needed
 
 # Import configurations and modules
 from config import BOT_TOKEN, log
 import database as db
 import telethon_utils as telethon_api
-import handlers # Import handlers to register them
+import handlers # Import handlers module
 
 # Flag to indicate if shutdown is in progress
 _shutdown_in_progress = False
+updater = None # Define updater in global scope for shutdown handler access
 
 def shutdown(signum, frame):
     """Handles shutdown signals (SIGTERM, SIGINT) for graceful exit."""
-    global _shutdown_in_progress
+    global _shutdown_in_progress, updater
     if _shutdown_in_progress:
         log.warning("Shutdown already in progress, ignoring signal.")
         return
@@ -30,8 +31,7 @@ def shutdown(signum, frame):
     telethon_api.shutdown_telethon() # Signals stop event and handles disconnects/thread joins
 
     # 2. Stop the PTB Updater
-    # Access updater instance (need to make it accessible, e.g., global or passed)
-    if 'updater' in globals() and updater:
+    if updater:
         log.info("Stopping PTB Updater polling...")
         updater.stop()
         log.info("PTB Updater stopped.")
@@ -53,6 +53,7 @@ def main():
 
     # --- Initialize PTB ---
     try:
+        # persistence= # Consider adding persistence later if needed
         updater = Updater(token=BOT_TOKEN, use_context=True)
         dp: Dispatcher = updater.dispatcher
     except Exception as e:
@@ -64,63 +65,58 @@ def main():
     # Register the main conversation handler from handlers.py
     dp.add_handler(handlers.main_conversation)
 
-    # Register the error handler
-    dp.add_handler(handlers.error_handler) # Note: ErrorHandler takes the callback directly
+    # Register the error handler CORRECTLY using add_error_handler
+    dp.add_error_handler(handlers.error_handler)
 
     log.info("Handlers registered.")
 
     # --- Initialize Telethon Userbots ---
-    # Load existing sessions and potentially connect/check auth status
-    # Run this in the main thread before starting polling/background tasks
-    # This ensures DB is ready and initial bot states are loaded.
     try:
-         # This function now iterates bots from DB and initializes runtime if not inactive
         telethon_api.initialize_all_userbots()
     except Exception as e:
         log.error(f"Error during initial userbot initialization: {e}", exc_info=True)
-        # Decide if this is critical enough to stop startup? Maybe not, log and continue.
 
     # --- Start Background Task Checker ---
-    # telethon_utils now handles starting its own background task thread internally
-    # Ensure telethon_api.start_background_tasks() is implemented correctly if needed,
-    # but the current telethon_utils.py starts it automatically via _execute_single_task calls.
-    # The run_check_tasks_periodically function needs to be started.
-    # Let's create a dedicated thread for the task checker loop from telethon_utils.
     log.info("Starting Telethon background task checker thread...")
     try:
-        # The checker loop needs its own event loop to run async tasks in
         checker_loop = asyncio.new_event_loop()
         def run_checker():
             asyncio.set_event_loop(checker_loop)
-            checker_loop.run_until_complete(telethon_api.run_check_tasks_periodically())
+            # Ensure the loop eventually completes or handles exceptions properly
+            try:
+                checker_loop.run_until_complete(telethon_api.run_check_tasks_periodically())
+            except Exception as task_e:
+                 log.critical(f"CRITICAL: Background task checker loop crashed: {task_e}", exc_info=True)
+            finally:
+                 if not checker_loop.is_closed(): checker_loop.close()
 
         checker_thread = threading.Thread(target=run_checker, name="TaskCheckerThread", daemon=True)
         checker_thread.start()
         log.info("Telethon background task checker thread started.")
     except Exception as e:
         log.critical(f"CRITICAL: Failed to start background task checker: {e}", exc_info=True)
-        # Depending on importance, might exit here
+        # Consider exiting if background tasks are essential and fail to start
         # sys.exit(1)
 
 
     # --- Register Signal Handlers ---
-    signal.signal(signal.SIGTERM, shutdown) # Signal for graceful shutdown (e.g., Docker, Render)
-    signal.signal(signal.SIGINT, shutdown)  # Signal for Ctrl+C
+    signal.signal(signal.SIGTERM, shutdown) # For Docker/Render shutdown
+    signal.signal(signal.SIGINT, shutdown)  # For Ctrl+C
 
     # --- Start Polling ---
     log.info("Starting PTB polling...")
     updater.start_polling()
-    log.info("Bot is now running. Press Ctrl+C to stop.")
+    log.info("Bot is now running. Press Ctrl+C or send SIGTERM to stop.")
 
-    # Keep the main thread alive until shutdown signal
+    # Keep the main thread alive (listens for signals) until updater.stop() is called
     updater.idle()
 
-    # --- Cleanup (should be handled by shutdown function) ---
-    # Code here likely won't be reached if using updater.idle() and signal handlers correctly
-    log.info("Bot polling ended.")
-    # Ensure cleanup runs even if idle() exits unexpectedly
+    # --- Cleanup (after idle() stops, usually via shutdown signal) ---
+    log.info("Bot polling loop exited.")
+    # Ensure shutdown logic runs even if idle() exits unexpectedly
     if not _shutdown_in_progress:
-         shutdown(0, None) # Manual shutdown call if idle ends without signal
+         log.warning("Updater exited unexpectedly without shutdown signal. Initiating cleanup.")
+         shutdown(0, None) # Manual shutdown call
 
 
 if __name__ == "__main__":
