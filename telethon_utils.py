@@ -19,10 +19,9 @@ from telethon.errors import (
     SessionPasswordNeededError, FloodWaitError, ChatSendMediaForbiddenError,
     UserNotParticipantError, ChatAdminRequiredError, # UserBannedInChatError REMOVED
     PhoneNumberInvalidError, PhoneCodeInvalidError, PhoneCodeExpiredError,
-    PasswordHashInvalidError, ApiIdInvalidError, AuthKeyError, # TelethonConnectionError REMOVED
+    PasswordHashInvalidError, ApiIdInvalidError, AuthKeyError, # ConnectionError REMOVED
     UserDeactivatedBanError, UsernameNotOccupiedError, ChannelPrivateError, InviteHashExpiredError, InviteHashInvalidError,
-    MessageIdInvalidError, PeerIdInvalidError, UserBlockedError, ChatWriteForbiddenError
-    # Note: We will catch the standard Python 'ConnectionError' for network issues.
+    MessageIdInvalidError, PeerIdInvalidError, UserBlockedError, ChatWriteForbiddenError # Keep ChatWriteForbiddenError
 )
 # Import RPC functions used
 from telethon.tl.functions.channels import JoinChannelRequest, GetFullChannelRequest
@@ -33,7 +32,7 @@ import database as db
 from config import (
     SESSION_DIR, CLIENT_TIMEOUT, CHECK_TASKS_INTERVAL, UTC_TZ, log # Use logger from config
 )
-from translations import get_text # Only for very specific internal errors if needed
+# from translations import get_text # REMOVED Import from translations
 
 # --- Userbot Runtime Management ---
 _userbots = {}
@@ -247,7 +246,6 @@ def stop_userbot_runtime(phone_number):
         log.warning(f"Tried to stop runtime for {phone_number}, but it wasn't running.")
         return False
 
-
 # --- Authentication Flow ---
 
 async def start_authentication_flow(phone, api_id, api_hash):
@@ -256,7 +254,7 @@ async def start_authentication_flow(phone, api_id, api_hash):
     Returns: Tuple (status, data) as described before.
     """
     session_file = _get_session_path(phone)
-    await _delete_session_file(phone) # Ensure clean state
+    await _delete_session_file(phone)
 
     temp_loop = asyncio.new_event_loop()
     temp_client = None
@@ -284,7 +282,7 @@ async def start_authentication_flow(phone, api_id, api_hash):
     except FloodWaitError as e: log.warning(f"Flood wait code request {phone}: {e.seconds}s"); auth_result_status = 'error'; auth_result_data = f"Flood wait: Try again in {e.seconds} seconds."
     except (PhoneNumberInvalidError, ApiIdInvalidError, ApiIdPublishedFloodError) as e: log.error(f"Config/Phone error code request {phone}: {e}"); auth_result_status = 'error'; auth_result_data = f"Invalid config/phone: {e}"
     except AuthKeyError: log.error(f"AuthKeyError initial code request {phone}."); auth_result_status = 'error'; auth_result_data = "Auth key error. Please try again."
-    except (ConnectionError, asyncio.TimeoutError, OSError) as e: log.error(f"Connection issue code request {phone}: {e}"); auth_result_status = 'error'; auth_result_data = f"Connection failed: {e}" # Catch built-in ConnectionError
+    except (ConnectionError, asyncio.TimeoutError, OSError) as e: log.error(f"Connection issue code request {phone}: {e}"); auth_result_status = 'error'; auth_result_data = f"Connection failed: {e}"
     except Exception as e: log.exception(f"Unexpected error auth start {phone}: {e}"); auth_result_status = 'error'; auth_result_data = f"Unexpected error: {e}"
 
     if auth_result_status == 'error':
@@ -329,7 +327,7 @@ async def complete_authentication_flow(auth_data, code=None, password=None):
 
             log.info(f"Auth successful for {phone} (@{username}) via temp client.")
             db_add_ok = db.add_userbot(phone, session_file_rel, api_id, api_hash, 'active', username, None, None)
-            if db_add_ok: final_status = 'success'; final_data = {'phone': phone, 'username': username}; log.info(f"Userbot {phone} info saved to DB."); get_userbot_runtime_info(phone) # Init persistent runtime
+            if db_add_ok: final_status = 'success'; final_data = {'phone': phone, 'username': username}; log.info(f"Userbot {phone} info saved to DB."); get_userbot_runtime_info(phone)
             else: final_status = 'error'; final_data = "Auth success, but DB save failed."; log.error(final_data)
         else: final_status = 'error'; final_data = "Sign-in completed but authorization failed."; log.error(f"Auth check failed for {phone}")
 
@@ -348,10 +346,9 @@ async def complete_authentication_flow(auth_data, code=None, password=None):
         try: temp_loop.close(); log.debug(f"Temp auth loop {phone} closed.")
         except Exception as loop_e: log.error(f"Error closing temp loop {phone}: {loop_e}")
 
-    if final_status == 'error' and isinstance(final_data, str): final_data = {'error_message': final_data} # Standardize error
+    if final_status == 'error' and isinstance(final_data, str): final_data = {'error_message': final_data}
 
     return final_status, final_data
-
 
 # --- Other Telethon Actions ---
 
@@ -367,21 +364,13 @@ def parse_telegram_url_simple(url: str) -> tuple:
 def _format_entity_detail(entity) -> dict:
     """Formats Telethon entity into a standard detail dictionary."""
     if not entity: return {}
-    return {
-        "id": entity.id,
-        "name": getattr(entity, 'title', getattr(entity, 'username', f"ID {entity.id}")),
-        "username": getattr(entity, 'username', None)
-    }
+    return { "id": entity.id, "name": getattr(entity, 'title', getattr(entity, 'username', f"ID {entity.id}")), "username": getattr(entity, 'username', None)}
 
 async def join_groups_batch(phone, urls):
-    """
-    Manages joining multiple Telegram groups/channels for a specified userbot.
-    Returns: Tuple (error_info, results_dict)
-    """
+    """ Manages joining multiple Telegram groups/channels for a specified userbot. Returns: Tuple (error_info, results_dict) """
     runtime_info = get_userbot_runtime_info(phone)
     if not runtime_info: return {"error": "Userbot runtime not available."}, {}
-    client, loop, lock = runtime_info['client'], runtime_info['loop'], runtime_info['lock']
-    bot_display = phone
+    client, loop, lock = runtime_info['client'], runtime_info['loop'], runtime_info['lock']; bot_display = phone
 
     async def _join_batch_task():
         results = {}; nonlocal bot_display
@@ -399,16 +388,13 @@ async def join_groups_batch(phone, urls):
                         if link_type == "unknown": raise ValueError("Unrecognized URL")
                         if link_type == "message_link": raise ValueError("Cannot join msg link")
 
-                        if link_type == "private_join":
-                            log.info(f"{bot_display}: Join invite: {identifier}"); updates = await client(ImportChatInviteRequest(identifier))
-                            if updates and updates.chats: entity = updates.chats[0]; status, detail = "success", _format_entity_detail(entity)
-                            else: raise InviteHashInvalidError("Import empty.")
-                        elif link_type == "public":
-                            log.info(f"{bot_display}: Resolve public: {identifier}"); entity = await client.get_entity(identifier)
-                            if not isinstance(entity, (Channel, TelethonChat)): raise ValueError("Link->user")
-                            log.info(f"{bot_display}: Join public: {getattr(entity,'title','N/A')}"); await client(JoinChannelRequest(entity)); status, detail = "success", _format_entity_detail(entity)
+                        if link_type == "private_join": log.info(f"{bot_display}: Join invite: {identifier}"); updates = await client(ImportChatInviteRequest(identifier));
+                        if updates and updates.chats: entity = updates.chats[0]; status, detail = "success", _format_entity_detail(entity)
+                        else: raise InviteHashInvalidError("Import empty.")
+                        elif link_type == "public": log.info(f"{bot_display}: Resolve public: {identifier}"); entity = await client.get_entity(identifier);
+                        if not isinstance(entity, (Channel, TelethonChat)): raise ValueError("Link->user")
+                        log.info(f"{bot_display}: Join public: {getattr(entity,'title','N/A')}"); await client(JoinChannelRequest(entity)); status, detail = "success", _format_entity_detail(entity)
                         else: raise ValueError("Unsupported link type")
-
                     except (InviteHashExpiredError, InviteHashInvalidError): status, detail = "failed", {"reason": "invalid_invite"}
                     except ChannelPrivateError: status, detail = "failed", {"reason": "private"}
                     except ChatWriteForbiddenError: status, detail = "failed", {"reason": "banned_or_restricted"}; log.warning(f"{bot_display}: ChatWriteForbidden {url}")
@@ -416,22 +402,18 @@ async def join_groups_batch(phone, urls):
                     except ChatAdminRequiredError: status, detail = "pending", {"reason": "admin_approval"}
                     except FloodWaitError as e: wait = min(e.seconds + random.uniform(1, 3), 90); log.warning(f"{bot_display}: Flood join {url} ({e.seconds}s). Wait {wait:.1f}s."); await asyncio.sleep(wait); status, detail = "flood_wait", {"seconds": e.seconds}
                     except ValueError as e: status, detail = "failed", {"reason": f"invalid_link_or_resolve: {e}"}
-                    except (AuthKeyError, ConnectionError, asyncio.TimeoutError, OSError) as e: log.error(f"{bot_display}: Conn/Auth err join {url}: {e}. Abort."); db.update_userbot_status(phone, 'error', f"Conn/Auth Err: {type(e).__name__}"); raise ConnectionError(f"Conn/Auth fail: {e}") # Catch built-in ConnErr
+                    except (AuthKeyError, ConnectionError, asyncio.TimeoutError, OSError) as e: log.error(f"{bot_display}: Conn/Auth err join {url}: {e}. Abort."); db.update_userbot_status(phone, 'error', f"Conn/Auth Err: {type(e).__name__}"); raise ConnectionError(f"Conn/Auth fail: {e}")
                     except UserDeactivatedBanError as e: log.critical(f"{bot_display}: BANNED join {url}: {e}. Abort."); db.update_userbot_status(phone, 'error', "Account Banned"); raise e
                     except Exception as e: log.exception(f"{bot_display}: Unexpected err join {url}: {e}"); status, detail = "failed", {"reason": f"internal_error: {e}"}
-
                     results[url] = (status, detail); log.info(f"{bot_display}: Result {url}: {status} ({(time.monotonic()-start_time):.2f}s)")
                     if i < len(urls) - 1: delay = max(0.5, 3.0 + random.uniform(-1.0, 1.0)); await asyncio.sleep(delay)
-
             except ConnectionError as e: return {"error": f"Connection Error: {e}"}, results
             except UserDeactivatedBanError as e: return {"error": "Userbot Account Banned/Deactivated"}, results
             except Exception as e: log.exception(f"{bot_display}: Error in _join_batch_task: {e}"); return {"error": f"Batch Error: {e}"}, results
-            log.info(f"{bot_display}: Finished join batch task."); return {}, results # No fatal error
-
+            log.info(f"{bot_display}: Finished join batch task."); return {}, results
     if not loop or loop.is_closed(): return {"error": "Userbot event loop unavailable."}, {}
     future = asyncio.run_coroutine_threadsafe(_join_batch_task(), loop)
-    try:
-        timeout = (len(urls) * (CLIENT_TIMEOUT / 2 + 5)) + 30; error_info, results_dict = future.result(timeout=timeout); return error_info, results_dict
+    try: timeout = (len(urls) * (CLIENT_TIMEOUT / 2 + 5)) + 30; error_info, results_dict = future.result(timeout=timeout); return error_info, results_dict
     except asyncio.TimeoutError: log.error(f"Timeout join batch {phone}."); final_results = locals().get('results_dict', {}); [final_results.setdefault(url, ("failed", {"reason": "batch_timeout"})) for url in urls if url not in final_results]; return {"error": "Batch join timeout."}, final_results
     except Exception as e: log.exception(f"Error join batch future {phone}: {e}"); final_results = locals().get('results_dict', {}); [final_results.setdefault(url, ("failed", {"reason": f"internal_error: {e}"})) for url in urls if url not in final_results]; error_info = {"error": str(e)} if not locals().get('error_info') else locals()['error_info']; return error_info, final_results
 
@@ -440,8 +422,7 @@ async def get_joined_chats_telethon(phone):
     """Retrieves joined chats (groups/channels) for a userbot."""
     runtime_info = get_userbot_runtime_info(phone)
     if not runtime_info: return None, {"error": "Userbot runtime not available."}
-    client, loop, lock = runtime_info['client'], runtime_info['loop'], runtime_info['lock']
-    bot_display = phone
+    client, loop, lock = runtime_info['client'], runtime_info['loop'], runtime_info['lock']; bot_display = phone
 
     async def _get_dialogs_task():
         dialog_list = []; error_msg = None; nonlocal bot_display
@@ -460,19 +441,17 @@ async def get_joined_chats_telethon(phone):
                         if id_part_str.startswith('-100'): id_part = id_part_str[4:]; link = f"https://t.me/c/{id_part}/1"
                         dialog_list.append({ 'id': entity.id, 'name': getattr(entity, 'title', f'ID: {entity.id}'), 'username': username, 'link': link, 'type': 'channel' if dialog.is_channel else 'group'})
                 log.info(f"{bot_display}: Fetched {dialog_count} dialogs, found {len(dialog_list)} groups/channels.")
-            except ConnectionError as e: error_msg = f"Connection Error: {e}" # Catch built-in ConnectionError
+            except ConnectionError as e: error_msg = f"Connection Error: {e}"
             except AuthKeyError: error_msg = "Invalid session."; db.update_userbot_status(phone, 'error', "Invalid session")
             except UserDeactivatedBanError: error_msg = "Account Banned/Deactivated."; db.update_userbot_status(phone, 'error', error_msg)
             except FloodWaitError as e: error_msg = f"Flood wait ({e.seconds}s)"
             except Exception as e: log.exception(f"{bot_display}: Error fetching dialogs: {e}"); error_msg = f"Unexpected error: {e}"
             return dialog_list, {"error": error_msg} if error_msg else {}
-
     if not loop or loop.is_closed(): return None, {"error": "Userbot loop unavailable."}
     future = asyncio.run_coroutine_threadsafe(_get_dialogs_task(), loop)
     try: dialogs, error_info = future.result(timeout=120); return dialogs, error_info
     except asyncio.TimeoutError: return None, {"error": "Timeout fetching dialogs."}
     except Exception as e: return None, {"error": f"Internal task error: {e}"}
-
 
 # --- Message Link Parsing ---
 async def get_message_entity_by_link(client, link):
@@ -488,7 +467,7 @@ async def get_message_entity_by_link(client, link):
     log.debug(f"Parsed link: Type={link_type}, Identifier='{chat_identifier}', MsgID={message_id}")
 
     try:
-        if not client.is_connected(): raise ConnectionError("Client not connected") # Use built-in ConnectionError
+        if not client.is_connected(): raise ConnectionError("Client not connected")
         chat_entity = await client.get_entity(chat_identifier)
         if not chat_entity: raise ValueError(f"Could not resolve entity '{chat_identifier}'")
         log.debug(f"Resolved chat entity: ID={chat_entity.id}, Type={type(chat_entity)}")
@@ -496,18 +475,15 @@ async def get_message_entity_by_link(client, link):
         return chat_entity, message_id
     except MessageIdInvalidError as e: log.error(f"MsgID invalid link {link}: {e}"); raise ValueError(f"Message ID {message_id} invalid.") from e
     except (ValueError, TypeError) as e: log.error(f"Entity resolve error link {link}: {e}"); raise ValueError(f"Could not resolve source chat: {e}") from e
-
+    except ConnectionError as e: log.error(f"Connection error resolving link {link}: {e}"); raise # Re-raise connection errors
 
 # --- Forwarding Logic ---
 async def _forward_single_message(client, target_peer, source_chat_entity, message_id, fallback_chat_entity=None, fallback_message_id=None):
     """Forwards single message, handles errors, returns (bool_success, error_msg_or_None)."""
-    phone = getattr(client.session.auth_key, 'phone', 'Unknown')
-    target_id = getattr(target_peer, 'id', str(target_peer))
+    phone = getattr(client.session.auth_key, 'phone', 'Unknown'); target_id = getattr(target_peer, 'id', str(target_peer))
     log.debug(f"[{phone}] Attempt FWD -> Target={target_id} from Chat={source_chat_entity.id}/Msg={message_id}")
     ok, err_reason = False, None
-    try:
-        await client.forward_messages(target_peer, message_id, source_chat_entity)
-        log.info(f"[{phone}] -> FWD SUCCESS to Target={target_id}"); ok = True
+    try: await client.forward_messages(target_peer, message_id, source_chat_entity); log.info(f"[{phone}] -> FWD SUCCESS to Target={target_id}"); ok = True
     except ChatSendMediaForbiddenError:
         log.warning(f"[{phone}] -> Media forbidden Target={target_id}. Fallback?"); err_reason = "Media forbidden"
         if fallback_chat_entity and fallback_message_id:
@@ -516,12 +492,12 @@ async def _forward_single_message(client, target_peer, source_chat_entity, messa
             except Exception as fb_e: err_reason += f" (Fallback Failed: {type(fb_e).__name__})"; log.exception(f"[{phone}] -> Fallback FAIL Target={target_id}: {fb_e}", exc_info=False)
         else: err_reason += " (No Fallback)"; log.warning(f"[{phone}] -> FWD FAIL Target={target_id}: {err_reason}")
     except FloodWaitError as e: err_reason = f"Flood Wait ({e.seconds}s)"; log.warning(f"[{phone}] -> {err_reason} Target={target_id}. Wait {e.seconds}s."); await asyncio.sleep(e.seconds + random.uniform(0.5, 1.5))
-    except (ChatWriteForbiddenError, UserBlockedError): err_reason = "Permission denied"; log.warning(f"[{phone}] -> Permission denied Target={target_id}.") # Combined some permission errors
+    except (ChatWriteForbiddenError, UserBlockedError): err_reason = "Permission denied"; log.warning(f"[{phone}] -> Permission denied Target={target_id}.")
     except UserNotParticipantError: err_reason = "Not in group"; log.warning(f"[{phone}] -> Not participant Target={target_id}.")
     except (PeerIdInvalidError, ChannelPrivateError): err_reason = "Target invalid/private"; log.warning(f"[{phone}] -> Target={target_id} invalid/private.")
-    except MessageIdInvalidError: err_reason = "Source msg invalid"; log.error(f"[{phone}] -> Source {source_chat_entity.id}/{message_id} invalid."); raise ValueError(err_reason) # Critical
-    except (AuthKeyError, ConnectionError, asyncio.TimeoutError, OSError) as e: err_reason = f"Conn/Sess Error: {type(e).__name__}"; log.error(f"[{phone}] -> {err_reason} Target={target_id}: {e}"); raise ConnectionError(err_reason) from e # Critical, use built-in ConnectionError
-    except UserDeactivatedBanError as e: err_reason = "Account Banned"; log.critical(f"[{phone}] -> BANNED: {e}. ABORT."); db.update_userbot_status(phone, 'error', err_reason); raise e # Critical
+    except MessageIdInvalidError: err_reason = "Source msg invalid"; log.error(f"[{phone}] -> Source {source_chat_entity.id}/{message_id} invalid."); raise ValueError(err_reason)
+    except (AuthKeyError, ConnectionError, asyncio.TimeoutError, OSError) as e: err_reason = f"Conn/Sess Error: {type(e).__name__}"; log.error(f"[{phone}] -> {err_reason} Target={target_id}: {e}"); raise ConnectionError(err_reason) from e
+    except UserDeactivatedBanError as e: err_reason = "Account Banned"; log.critical(f"[{phone}] -> BANNED: {e}. ABORT."); db.update_userbot_status(phone, 'error', err_reason); raise e
     except Exception as e: err_reason = f"Unexpected FWD err: {type(e).__name__}"; log.exception(f"[{phone}] -> Unexpected err Target={target_id}: {e}", exc_info=True)
     return ok, err_reason
 
@@ -529,12 +505,12 @@ async def _forward_single_message(client, target_peer, source_chat_entity, messa
 async def _execute_single_task(instance, task_info):
     """Core logic for executing one forwarding task."""
     client = instance["client"]; lock = instance["lock"]; phone = task_info['userbot_phone']; client_id = task_info['client_id']
-    run_ts = int(datetime.now(UTC_TZ).timestamp()); log.info(f"[{phone}] Task triggered client {client_id}. Lock...")
+    run_ts = int(datetime.now(UTC_TZ).timestamp()); log.info(f"[{phone}] Task trigger client {client_id}. Lock...")
     success_count, target_count, final_err = 0, 0, None
     try:
         async with lock:
             log.info(f"[{phone}] Lock acquire. Task execute.")
-            if not await _safe_connect(client, phone): raise ConnectionError("Task connect fail.") # Use built-in ConnectionError
+            if not await _safe_connect(client, phone): raise ConnectionError("Task connect fail.")
 
             primary_link = task_info['message_link']; fallback_link = task_info['fallback_message_link']
             try: source_chat, source_msg_id = await get_message_entity_by_link(client, primary_link); log.info(f"[{phone}] Primary msg ok.")
@@ -546,9 +522,9 @@ async def _execute_single_task(instance, task_info):
 
             target_ids = []; folder_name = "N/A"
             if task_info['send_to_all_groups']:
-                log.info(f"[{phone}] Target: All groups..."); dialogs, err = await get_joined_chats_telethon(phone)
-                if err: raise ConnectionError(f"Task fail get targets: {err.get('error')}") # Use built-in ConnectionError
-                target_ids = [d['id'] for d in dialogs if d.get('id')]; log.info(f"[{phone}] Target {len(target_ids)} dialogs.")
+                log.info(f"[{phone}] Target: All groups..."); dialogs, err_info = await get_joined_chats_telethon(phone)
+                if err_info and err_info.get('error'): raise ConnectionError(f"Task fail get targets: {err_info['error']}")
+                target_ids = [d['id'] for d in dialogs if d and d.get('id')]; log.info(f"[{phone}] Target {len(target_ids)} dialogs.")
             else:
                 folder_id = task_info['folder_id']
                 if folder_id: folder_name = db.get_folder_name(folder_id) or f"ID {folder_id}"; log.info(f"[{phone}] Target: Folder '{folder_name}'"); target_ids = db.get_target_groups_by_folder(folder_id); log.info(f"[{phone}] Target {len(target_ids)} DB groups.")
@@ -567,15 +543,15 @@ async def _execute_single_task(instance, task_info):
                         if not target_peer: raise ValueError("Resolve target peer fail")
                         fwd_ok, fwd_err = await _forward_single_message(client, target_peer, source_chat, source_msg_id, fb_chat, fb_msg_id)
                         if fwd_ok: success_count += 1
-                        elif fwd_err and final_err is None and "Flood Wait" not in fwd_err and "Connection Error" not in fwd_err and "Conn/Sess Error" not in fwd_err: final_err = f"Target {target_id}: {fwd_err}"
+                        elif fwd_err and final_err is None and "Flood Wait" not in fwd_err and "Conn/Sess Error" not in fwd_err: final_err = f"Target {target_id}: {fwd_err}"
                         processed.add(target_id)
                     except FloodWaitError as e_fwd_loop: final_err = f"Flood Wait ({e_fwd_loop.seconds}s)"; log.warning(f"[{phone}] Outer loop flood. Abort run."); break
-                    except ConnectionError as e_conn_loop: final_err = str(e_conn_loop); log.critical(f"[{phone}] Conn/Auth error loop. Abort."); raise # Use built-in ConnectionError
+                    except ConnectionError as e_conn_loop: final_err = str(e_conn_loop); log.critical(f"[{phone}] Conn/Auth error loop. Abort."); raise
                     except UserDeactivatedBanError as e_ban_loop: final_err = "Account Banned"; log.critical(f"[{phone}] BANNED loop. Abort."); raise
                     except ValueError as e_val_loop: final_err = f"Config/Resolve err: {e_val_loop}"; log.error(f"[{phone}] {final_err}. Abort run."); break
                     except Exception as e_loop: final_err = f"Unexpected loop err: {e_loop}"; log.exception(f"[{phone}] {final_err}"); break
                     await asyncio.sleep(delay + random.uniform(0, 0.5))
-    except (ValueError, ConnectionError, UserDeactivatedBanError) as critical_e: log.error(f"[{phone}] Task CRITICAL FAIL: {critical_e}"); final_err = final_err or str(critical_e) # Use built-in ConnectionError
+    except (ValueError, ConnectionError, UserDeactivatedBanError) as critical_e: log.error(f"[{phone}] Task CRITICAL FAIL: {critical_e}"); final_err = final_err or str(critical_e)
     except Exception as outer_e: log.exception(f"[{phone}] Task unexpected exception: {outer_e}"); final_err = f"Unexpected task error: {outer_e}"
     finally: log.info(f"[{phone}] Task finish. Sent: {success_count}/{target_count}. Error: {final_err}. Release lock."); db.update_task_after_run(client_id, phone, run_ts, success_count, error=final_err)
 
@@ -614,7 +590,6 @@ def shutdown_telethon():
     log.info("Initiating Telethon shutdown..."); _stop_event.set()
     with _userbots_lock: phones = list(_userbots.keys()); log.info(f"Stopping {len(phones)} userbot runtimes...")
     if not phones: log.info("No active runtimes."); return
-    # Stop runtime sequentially might be safer
     for phone in phones: stop_userbot_runtime(phone)
     log.info("Telethon shutdown sequence finished.")
 
