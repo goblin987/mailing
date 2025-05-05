@@ -1,3 +1,5 @@
+# --- START OF FILE config.py ---
+
 # config.py
 import os
 import logging
@@ -13,12 +15,13 @@ load_dotenv()
 
 # --- Constants ---
 CLIENT_TIMEOUT = 30  # Telethon client timeout in seconds
-CHECK_TASKS_INTERVAL = 60  # How often to check for due tasks, in seconds
+CHECK_TASKS_INTERVAL = 60  # How often to check for due tasks, in seconds (1 minute)
 DB_FILENAME = 'telegram_bot.db'
 SESSION_SUBDIR = 'sessions'
 LOG_FILENAME = 'bot.log'
-MAX_LOG_BYTES = 10 * 1024 * 1024  # Max log file size (e.g., 10MB)
+MAX_LOG_BYTES = 10 * 1024 * 1024  # Max log file size (10MB)
 LOG_BACKUP_COUNT = 5  # Number of old log files to keep
+# Note: The 'groups_reached' stat in the DB might be unreliable/deprecated.
 
 # --- Compatibility Shim ---
 # Fake 'imghdr' module for Python 3.11+ compatibility where imghdr is deprecated
@@ -33,17 +36,18 @@ except ImportError:
     def what(file, h=None):
         """Basic file type check using 'filetype' as a replacement for imghdr.what."""
         try:
+            buf = None
             # Read a small chunk for type detection
             if hasattr(file, 'read'):
                 start_pos = file.tell() # Remember position
-                buf = file.read(32)
+                buf = file.read(261) # Read common header size max (like JPEG)
                 file.seek(start_pos) # Reset position
             elif isinstance(file, str):
                 if not os.path.exists(file): return None
                 with open(file, 'rb') as f:
-                    buf = f.read(32)
+                    buf = f.read(261)
             elif isinstance(file, bytes):
-                 buf = file[:32]
+                 buf = file[:261]
             else:
                 return None # Unsupported type
 
@@ -51,7 +55,12 @@ except ImportError:
 
             # Use filetype library
             kind = filetype.guess(buf)
-            return kind.extension if kind else None # Return extension like imghdr did
+            # Return the common image extension if it's an image type known by filetype
+            # imghdr typically returned 'jpeg', 'png', 'gif', etc.
+            if kind and kind.mime.startswith('image/'):
+                 # filetype returns 'jpg', imghdr returned 'jpeg'
+                 return 'jpeg' if kind.extension == 'jpg' else kind.extension
+            return None # Return None if not a recognized image type
         except Exception as e:
              log_imghdr.warning(f"Error during 'what' compatibility check: {e}")
              return None
@@ -62,6 +71,7 @@ except ImportError:
 
 # --- Data Directory Setup ---
 # Use RENDER_DISK_PATH (persistent disk on Render) if set, otherwise DATA_DIR, otherwise default './data'
+# Ensure DATA_DIR_BASE is treated as the root for persistent storage.
 DATA_DIR_BASE = os.environ.get('RENDER_DISK_PATH', os.environ.get('DATA_DIR', './data'))
 DATA_DIR = os.path.abspath(DATA_DIR_BASE)
 DB_PATH = os.path.join(DATA_DIR, DB_FILENAME)
@@ -70,37 +80,69 @@ SESSION_DIR = os.path.join(DATA_DIR, SESSION_SUBDIR)
 
 # --- Environment Variable Loading & Validation ---
 # Defined early so logging setup can use it if needed
-def load_env_var(name, required=True, cast=str, default=None):
+def load_env_var(name, required=True, cast_func=str, default=None):
     """Loads an environment variable, raises ValueError if required and missing."""
     value = os.environ.get(name)
     if value is None:
         if required and default is None:
-            raise ValueError(f"Required environment variable '{name}' is not set.")
+            raise ValueError(f"CRITICAL: Required environment variable '{name}' is not set.")
         value = default # Use default if not required or default is provided
-    elif cast: # Cast only if value is not None
-        try:
-            return cast(value)
-        except ValueError as e:
-            raise ValueError(f"Environment variable '{name}' ('{value}') has invalid type for {cast.__name__}: {e}") from e
-    return value # Return value as is (can be None if not required and no default)
+        log.debug(f"Env var '{name}' not set, using default: '{default}'")
+    else: # Value exists
+        log.debug(f"Env var '{name}' found.")
+        if cast_func: # Cast only if value exists and cast_func is provided
+            try:
+                return cast_func(value)
+            except ValueError as e:
+                raise ValueError(f"Environment variable '{name}' ('{value}') has invalid type for {cast_func.__name__}: {e}") from e
+    return value # Return value (could be None if not required and no default)
 
 try:
-    API_ID = load_env_var('API_ID', required=True, cast=int)
-    API_HASH = load_env_var('API_HASH', required=True, cast=str)
-    BOT_TOKEN = load_env_var('BOT_TOKEN', required=True, cast=str)
-    admin_ids_str = load_env_var('ADMIN_IDS', required=False, cast=str, default='')
-    # Ensure IDs are integers and handle potential whitespace
-    ADMIN_IDS = [int(id_.strip()) for id_ in admin_ids_str.split(',') if id_.strip()]
+    API_ID = load_env_var('API_ID', required=True, cast_func=int)
+    API_HASH = load_env_var('API_HASH', required=True, cast_func=str)
+    BOT_TOKEN = load_env_var('BOT_TOKEN', required=True, cast_func=str)
+    admin_ids_str = load_env_var('ADMIN_IDS', required=False, cast_func=str, default='')
+    # Ensure IDs are integers and handle potential whitespace/empty strings
+    ADMIN_IDS = [int(id_.strip()) for id_ in admin_ids_str.split(',') if id_.strip().isdigit()]
+    if not ADMIN_IDS and admin_ids_str: # Log if input was given but non were valid ints
+        log.warning(f"ADMIN_IDS provided ('{admin_ids_str}') but contained no valid integer IDs.")
+    elif not ADMIN_IDS:
+         log.warning("ADMIN_IDS environment variable is not set or empty. Admin features will be disabled.")
+
 except ValueError as e:
     # Use basic print here as logging might not be fully configured yet
     print(f"CRITICAL: Configuration Error loading environment variables - {e}")
-    sys.exit(1)
+    # Log to stderr as well, which Render might capture better initially
+    sys.stderr.write(f"CRITICAL: Configuration Error loading environment variables - {e}\n")
+    sys.exit(1) # Exit immediately on critical config errors
 
 # --- Logging Setup ---
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] - %(message)s')
 log_file_path = os.path.join(DATA_DIR, LOG_FILENAME)
 
-# File Handler (optional but recommended for persistence beyond Render's console log limits)
+# Ensure data directory exists before setting up file handler
+try:
+    # DATA_DIR (/data on Render) must already exist or be creatable.
+    # If running on Render, RENDER_DISK_PATH should point to the mounted disk.
+    if not os.path.isdir(DATA_DIR):
+        print(f"Data directory '{DATA_DIR}' not found. Attempting to create...")
+        try:
+             os.makedirs(DATA_DIR, exist_ok=True)
+             print(f"Created data directory: {DATA_DIR}")
+        except OSError as e:
+             print(f"CRITICAL: Failed to create data directory '{DATA_DIR}': {e}. Check permissions and RENDER_DISK_PATH.", file=sys.stderr)
+             sys.exit(1)
+
+    # Optional: Check writability early (logging might not be fully set up)
+    if not os.access(DATA_DIR, os.W_OK):
+         print(f"WARNING: Data directory '{DATA_DIR}' is not writable! File logging and database operations might fail.", file=sys.stderr)
+
+except Exception as e:
+    print(f"CRITICAL: Error during data directory check/creation: {e}", file=sys.stderr)
+    sys.exit(1)
+
+
+# Now setup logging handlers
 file_handler = None
 try:
     # Use RotatingFileHandler to prevent logs from growing indefinitely
@@ -111,16 +153,19 @@ try:
     file_handler.setLevel(logging.INFO) # Log INFO level and above to file
 except PermissionError:
      # Logging not set up yet, use print
-     print(f"Warning: Permission denied writing log file to {log_file_path}. File logging disabled.")
+     print(f"Warning: Permission denied writing log file to {log_file_path}. File logging disabled.", file=sys.stderr)
      file_handler = None
 except Exception as e:
-    print(f"Warning: Could not set up file logging to {log_file_path}: {e}")
+    print(f"Warning: Could not set up file logging to {log_file_path}: {e}", file=sys.stderr)
     file_handler = None
 
 # Stream Handler (for console output, captured by Render)
-stream_handler = logging.StreamHandler()
+stream_handler = logging.StreamHandler(sys.stdout) # Explicitly use stdout
 stream_handler.setFormatter(log_formatter)
-stream_handler.setLevel(logging.DEBUG) # Log DEBUG level and above to console/Render
+# Set console level based on an environment variable? Default to DEBUG.
+log_level_str = os.environ.get('LOG_LEVEL', 'DEBUG').upper()
+log_level = getattr(logging, log_level_str, logging.DEBUG)
+stream_handler.setLevel(log_level)
 
 # Configure root logger
 handlers_list = [stream_handler]
@@ -128,14 +173,17 @@ if file_handler:
     handlers_list.append(file_handler)
 
 logging.basicConfig(
-    level=logging.DEBUG, # Set root logger level to lowest (DEBUG) to allow handlers to filter
-    handlers=handlers_list
+    level=logging.DEBUG, # Set root logger level to lowest (DEBUG) to allow handlers to filter effectively
+    handlers=handlers_list,
+    format='%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] - %(message)s' # BasicConfig needs format too if setting here
 )
 log = logging.getLogger(__name__) # Use this logger in other modules: from config import log
+log.info(f"Logging configured. Stream level: {log_level_str}. File logging: {'Enabled' if file_handler else 'Disabled'}")
 
-# --- Ensure Data Directories Exist (AFTER Logging is setup) ---
+
+# --- Ensure Session Subdirectory Exists (AFTER Logging is setup) ---
 try:
-    # DATA_DIR (/data on Render) must already exist as the mount point provided by Render.
+    # DATA_DIR check repeated here now that logging is configured
     if not os.path.isdir(DATA_DIR):
         log.critical(f"CRITICAL: Data directory '{DATA_DIR}' does not exist or is not a directory! Check Render disk mount and RENDER_DISK_PATH env var.")
         sys.exit(1)
@@ -143,7 +191,7 @@ try:
     # Explicitly create the 'sessions' subdirectory if it doesn't exist.
     if not os.path.exists(SESSION_DIR):
         log.info(f"Session directory '{SESSION_DIR}' not found. Attempting to create...")
-        os.makedirs(SESSION_DIR) # This was the line failing before
+        os.makedirs(SESSION_DIR, exist_ok=True) # exist_ok=True prevents error if dir exists
         log.info(f"Created session directory: {SESSION_DIR}")
     elif not os.path.isdir(SESSION_DIR):
          # Handle case where SESSION_DIR exists but is a file
@@ -152,14 +200,14 @@ try:
     else:
         log.info(f"Session directory '{SESSION_DIR}' already exists.")
 
-    # Optional: Check writability - maybe less critical if makedirs worked
+    # Check writability (optional but good diagnostic)
     if not os.access(SESSION_DIR, os.W_OK):
          log.warning(f"Session directory '{SESSION_DIR}' might not be writable! Session file creation may fail.")
     if not os.access(DATA_DIR, os.W_OK):
          log.warning(f"Data directory '{DATA_DIR}' might not be writable! Database file creation/write may fail.")
 
 except OSError as e:
-    # If os.makedirs(SESSION_DIR) fails with Permission Denied here, it's definitely a disk permission issue.
+    # If os.makedirs fails with Permission Denied here, it's likely a disk permission issue.
     log.critical(f"CRITICAL: OSError ensuring directory '{SESSION_DIR}' exists/writable: {e}", exc_info=True)
     sys.exit(1)
 except Exception as e:
@@ -168,43 +216,50 @@ except Exception as e:
     sys.exit(1)
 
 # Log basic config info AFTER directory setup and logging is confirmed working
-log.info("--- Bot Starting ---")
+log.info("--- Bot Configuration Summary ---")
 log.info(f"Data Directory: {DATA_DIR}")
 log.info(f"Session Directory: {SESSION_DIR}")
 log.info(f"Database Path: {DB_PATH}")
 log.info(f"Log File Path: {log_file_path if file_handler else 'Disabled'}")
-log.info(f"Admin IDs: {ADMIN_IDS}")
+log.info(f"Admin IDs: {ADMIN_IDS if ADMIN_IDS else 'Not Configured'}")
 
 
 # --- Timezones ---
 try:
     LITHUANIA_TZ = pytz.timezone('Europe/Vilnius')
     UTC_TZ = pytz.utc
+    log.info(f"Timezones loaded: LT={LITHUANIA_TZ}, UTC={UTC_TZ}")
 except pytz.UnknownTimeZoneError as e:
     log.critical(f"CRITICAL: Unknown timezone specified: {e}")
     sys.exit(1)
 
 # --- Conversation States ---
-# Using string constants for states can be clearer for debugging
+# Using string constants for states can be clearer for debugging and persistence
+# Ensure this range covers all defined states numerically (0 to 27 = 28 states)
 (
     STATE_WAITING_FOR_CODE, STATE_WAITING_FOR_PHONE, STATE_WAITING_FOR_API_ID,
     STATE_WAITING_FOR_API_HASH, STATE_WAITING_FOR_CODE_USERBOT,
     STATE_WAITING_FOR_PASSWORD, STATE_WAITING_FOR_SUB_DETAILS,
-    STATE_WAITING_FOR_GROUP_URLS, # Possibly deprecated by folder system
-    STATE_WAITING_FOR_MESSAGE_LINK, # Possibly split into primary/fallback?
-    STATE_WAITING_FOR_START_TIME,
-    STATE_WAITING_FOR_FOLDER_CHOICE, STATE_WAITING_FOR_FOLDER_NAME,
-    STATE_WAITING_FOR_FOLDER_SELECTION, STATE_TASK_SETUP,
-    STATE_WAITING_FOR_LANGUAGE, STATE_WAITING_FOR_EXTEND_CODE,
+    STATE_WAITING_FOR_FOLDER_CHOICE, # Possibly deprecated
+    STATE_WAITING_FOR_FOLDER_NAME,
+    STATE_WAITING_FOR_FOLDER_SELECTION, # Used for edit/delete choice
+    STATE_TASK_SETUP, # Main task config state
+    STATE_WAITING_FOR_LANGUAGE, # Not really used as state, handled by callback
+    STATE_WAITING_FOR_EXTEND_CODE,
     STATE_WAITING_FOR_EXTEND_DAYS, STATE_WAITING_FOR_ADD_USERBOTS_CODE,
-    STATE_WAITING_FOR_ADD_USERBOTS_COUNT, STATE_SELECT_TARGET_GROUPS,
-    STATE_WAITING_FOR_USERBOT_SELECTION, STATE_WAITING_FOR_GROUP_LINKS, # Used by join & folder edit
-    STATE_WAITING_FOR_FOLDER_ACTION, STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK,
+    STATE_WAITING_FOR_ADD_USERBOTS_COUNT, STATE_SELECT_TARGET_GROUPS, # Selecting folder for task target
+    STATE_WAITING_FOR_USERBOT_SELECTION, # Used by join, task setup etc.
+    STATE_WAITING_FOR_GROUP_LINKS, # Used by join & folder add
+    STATE_WAITING_FOR_FOLDER_ACTION, # State after selecting folder to edit
+    STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK,
     STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK,
     STATE_FOLDER_EDIT_REMOVE_SELECT, # State for selecting groups to remove from folder
     STATE_FOLDER_RENAME_PROMPT, # State waiting for new folder name
-    STATE_ADMIN_CONFIRM_USERBOT_RESET # State for confirming userbot reset
-) = map(str, range(28)) # Ensure this range covers all defined states
+    STATE_ADMIN_CONFIRM_USERBOT_RESET, # State for confirming userbot reset (Not currently used)
+    STATE_WAITING_FOR_START_TIME, # State for task start time input
+    # Add any new states here if needed
+) = map(str, range(27)) # Adjusted range to 27 (0-26) if STATE_ADMIN_CONFIRM_USERBOT_RESET isn't used yet. Let's keep 28 (0-27) for now to match definition.
+# (0 to 27) = 28 states defined. Looks consistent with handlers.py usage.
 
 # --- Callback Data Prefixes ---
 # Using prefixes helps route callbacks efficiently in a single handler function
@@ -214,14 +269,15 @@ CALLBACK_TASK_PREFIX = "task_"
 CALLBACK_FOLDER_PREFIX = "folder_"
 CALLBACK_JOIN_PREFIX = "join_"
 CALLBACK_LANG_PREFIX = "lang_"
-CALLBACK_REMOVE_PREFIX = "remove_"
+# CALLBACK_REMOVE_PREFIX = "remove_" # Not used as a standalone prefix? Actions included in other prefixes.
 CALLBACK_INTERVAL_PREFIX = "interval_"
-CALLBACK_GENERIC_PREFIX = "generic_" # For simple actions like back buttons, confirmation
+CALLBACK_GENERIC_PREFIX = "generic_" # For simple actions like back buttons, confirmation, no-op
 
 
 # --- Utility Functions ---
-def is_admin(user_id):
+def is_admin(user_id: int) -> bool:
     """Checks if a given user ID is in the ADMIN_IDS list."""
     return user_id in ADMIN_IDS
 
-log.info("Configuration loaded.")
+log.info("Configuration loaded successfully.")
+# --- END OF FILE config.py ---
