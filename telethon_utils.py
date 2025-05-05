@@ -15,6 +15,7 @@ from telethon.tl.types import (
     PeerChannel, PeerChat, PeerUser, InputPeerChannel, InputPeerChat, InputPeerUser,
     Channel, User as TelethonUser, Chat as TelethonChat, Message
 )
+# Import specific errors to catch them explicitly
 from telethon.errors import (
     # Auth errors
     SessionPasswordNeededError, FloodWaitError, PhoneNumberInvalidError, PhoneCodeInvalidError,
@@ -415,7 +416,12 @@ async def start_authentication_flow(phone, api_id, api_hash):
     if status == 'error':
         log.warning(f"Authentication start failed for {phone}. Cleaning up temporary resources.")
         if temp_client:
-            await _safe_disconnect(temp_client, phone, update_db=False) # Disconnect if connected
+            # Disconnect in the temp loop if it's running
+            if temp_loop and temp_loop.is_running():
+                asyncio.run_coroutine_threadsafe(_safe_disconnect(temp_client, phone, update_db=False), temp_loop)
+            else: # If loop stopped, try disconnecting directly (might fail)
+                try: asyncio.run(temp_client.disconnect())
+                except: pass
         if temp_loop and temp_loop.is_running():
             temp_loop.call_soon_threadsafe(temp_loop.stop) # Signal loop to stop
         if 'auth_thread' in locals() and auth_thread.is_alive():
@@ -454,8 +460,9 @@ async def complete_authentication_flow(auth_data, code=None, password=None):
     try:
         async def _auth_complete_task():
             nonlocal me, phone # Allow modification
-            if not await _safe_connect(temp_client, "auth_complete"): # Use placeholder phone for log
-                 raise ConnectionError("Failed to connect client for auth completion.")
+            # No need to connect again if start_auth succeeded
+            # if not await _safe_connect(temp_client, "auth_complete"): # Use placeholder phone for log
+            #      raise ConnectionError("Failed to connect client for auth completion.")
 
             if code:
                 phone_code_hash = auth_data.get('phone_code_hash')
@@ -486,7 +493,8 @@ async def complete_authentication_flow(auth_data, code=None, password=None):
                     return 'error', {'error_message': "DB save failed after successful auth."}
             else:
                 log.error(f"Sign-in attempt completed but user is not authorized. Phone: {phone if me else 'Unknown'}")
-                return 'error', {'error_message': "Sign-in failed: Not authorized."}
+                # Password might be wrong even if sign_in doesn't raise PasswordHashInvalidError sometimes
+                return 'error', {'error_message': "Sign-in failed: Not authorized (Incorrect password or other issue?)."}
 
         # Run the completion task in the temporary loop
         future = asyncio.run_coroutine_threadsafe(_auth_complete_task(), temp_loop)
@@ -514,28 +522,42 @@ async def complete_authentication_flow(auth_data, code=None, password=None):
         log.error(f"AuthKeyError during sign-in completion for {phone}: {e}. Deleting session.")
         status = 'error'
         data = {'error_message': "Authentication key error (session likely invalid)."}
-        await _delete_session_file(phone or "unknown_auth_complete")
+        # Try getting phone from client if possible before deleting
+        known_phone = getattr(temp_client.session.auth_key, 'phone', phone or "unknown_auth_complete")
+        await _delete_session_file(known_phone)
     except UserDeactivatedBanError as e:
-        log.critical(f"Account {phone} is BANNED/DEACTIVATED during sign-in: {e}")
+        # Try getting phone number from 'me' if available from failed sign_in
+        known_phone = getattr(me, 'phone', phone or "Unknown")
+        log.critical(f"Account {known_phone} is BANNED/DEACTIVATED during sign-in: {e}")
         status = 'error'
         data = {'error_message': "Account banned or deactivated."}
         # Update DB status if we know the phone number
-        if phone != "Unknown": db.update_userbot_status(phone, 'error', last_error="Account Banned/Deactivated")
+        if known_phone != "Unknown": db.update_userbot_status(known_phone, 'error', last_error="Account Banned/Deactivated")
     except (ConnectionError, AsyncTimeoutError, OSError, RpcCallFailError) as e:
-        log.error(f"Connection error during sign-in completion for {phone}: {type(e).__name__} - {e}")
+        known_phone = getattr(me, 'phone', phone or "Unknown")
+        log.error(f"Connection error during sign-in completion for {known_phone}: {type(e).__name__} - {e}")
         status = 'error'
         data = {'error_message': f"Connection failed: {e}"}
     except Exception as e:
-        log.exception(f"Unexpected error during authentication completion for {phone}: {e}")
+        known_phone = getattr(me, 'phone', phone or "Unknown")
+        log.exception(f"Unexpected error during authentication completion for {known_phone}: {e}")
         status = 'error'
         # Ensure data is a dict with error message
         data = {'error_message': f"Unexpected error: {e}"}
 
 
     # --- Cleanup Temporary Resources ---
-    log.debug(f"Cleaning up temporary auth resources for {phone} (Status: {status}).")
+    known_phone_for_log = getattr(me, 'phone', phone or "unknown_auth_complete")
+    log.debug(f"Cleaning up temporary auth resources for {known_phone_for_log} (Status: {status}).")
     if temp_client:
-        await _safe_disconnect(temp_client, phone, update_db=False)
+        # Disconnect in the temp loop if it's running
+        if temp_loop and temp_loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(_safe_disconnect(temp_client, known_phone_for_log, update_db=False), temp_loop)
+            try: future.result(timeout=5) # Brief wait for disconnect
+            except Exception: pass
+        else: # If loop stopped, try disconnecting directly (might fail)
+            try: asyncio.run(temp_client.disconnect())
+            except Exception: pass
     if temp_loop and temp_loop.is_running():
         temp_loop.call_soon_threadsafe(temp_loop.stop)
     if auth_thread and auth_thread.is_alive():
@@ -647,19 +669,22 @@ async def resolve_links_info(phone: str, urls: list[str]) -> dict[str, dict]:
                         elif link_type == "private_join":
                             # Check invite hash validity without joining
                             try:
+                                 # Use CheckChatInviteRequest for invites
                                  invite_info = await client(CheckChatInviteRequest(hash=identifier))
                                  # Can be ChatInvite or ChatInviteAlready
-                                 if hasattr(invite_info, 'chat'): # ChatInvitePeek not useful here
+                                 # Peek is less useful as it requires joining first
+                                 if hasattr(invite_info, 'chat') and invite_info.chat: # ChatInviteAlready has chat obj
                                      entity_detail = _format_entity_detail(invite_info.chat)
                                      if entity_detail: resolved_info = entity_detail
                                      else: resolved_info = {"error": "Could not format chat from invite"}
-                                 elif hasattr(invite_info, 'title'): # ChatInvite object directly
-                                      # Less info than entity, but better than nothing
+                                 elif hasattr(invite_info, 'title'): # ChatInvite object has title but maybe no ID/entity
                                       resolved_info = {"name": invite_info.title, "type": "channel" if invite_info.channel else "group", "id": None} # ID not available here
                                  else:
                                       resolved_info = {"error": "Invite valid but no chat info"}
                             except InviteHashInvalidError: resolved_info = {"error": "Invalid invite link"}
                             except InviteHashExpiredError: resolved_info = {"error": "Expired invite link"}
+                            except UserAlreadyParticipantError: # Can happen with CheckChatInvite too
+                                 resolved_info = {"error": "Already participant (cannot get info from invite)"}
                             except Exception as invite_e: resolved_info = {"error": f"Invite check error: {type(invite_e).__name__}"}
 
                         elif link_type == "public" or link_type == "username":
@@ -688,18 +713,23 @@ async def resolve_links_info(phone: str, urls: list[str]) -> dict[str, dict]:
 
             except ConnectionError as e:
                 log.error(f"[{bot_display}] Connection error during link resolution batch: {e}")
-                return {u: {"error": "Userbot connection failed"} for u in urls if u not in results} | results # Add error for unprocessed URLs
+                # Add error for remaining URLs if connection failed mid-batch
+                for u in urls: results.setdefault(u, {"error": "Userbot connection failed"})
+                return results
             except AuthKeyError:
                  log.error(f"[{bot_display}] AuthKeyError during link resolution. Session invalid.")
                  db.update_userbot_status(phone, 'error', "Invalid session (AuthKeyError)")
-                 return {u: {"error": "Userbot session invalid"} for u in urls if u not in results} | results
+                 for u in urls: results.setdefault(u, {"error": "Userbot session invalid"})
+                 return results
             except UserDeactivatedBanError:
                   log.critical(f"[{bot_display}] BANNED during link resolution.")
                   db.update_userbot_status(phone, 'error', "Account Banned/Deactivated")
-                  return {u: {"error": "Userbot account banned"} for u in urls if u not in results} | results
+                  for u in urls: results.setdefault(u, {"error": "Userbot account banned"})
+                  return results
             except Exception as e:
                 log.exception(f"[{bot_display}] Error in _resolve_batch_task: {e}")
-                return {u: {"error": f"Batch Error: {e}"} for u in urls if u not in results} | results
+                for u in urls: results.setdefault(u, {"error": f"Batch Error: {e}"})
+                return results
 
             log.info(f"[{bot_display}] Finished resolving batch. {len(results)}/{len(urls)} processed.")
             return results
@@ -715,7 +745,8 @@ async def resolve_links_info(phone: str, urls: list[str]) -> dict[str, dict]:
     except AsyncTimeoutError:
         log.error(f"Timeout during link resolution batch for {phone}.")
         # Return partial results if any, mark others as timeout
-        partial_results = {} # Need access to 'results' from task, difficult here.
+        # Need a way to access 'results' from the task - this is tricky
+        # For now, mark all as timeout if future times out
         return {url: {"error": "Resolution timeout"} for url in urls}
     except Exception as e:
         log.exception(f"Error getting result from resolve batch future for {phone}: {e}")
@@ -964,7 +995,8 @@ async def get_joined_chats_telethon(phone):
         return None, {"error": f"Internal task error: {e}"}
 
 # --- Message Link Parsing & Access Check ---
-async def get_message_entity_by_link(client: TelegramClient, link: str) -> tuple[types.TypeEntity, int]:
+# **FIXED Type Hint Below**
+async def get_message_entity_by_link(client: TelegramClient, link: str) -> tuple[object, int]:
     """Parses a message link and resolves the chat entity and message ID."""
     link = link.strip()
     log.debug(f"Parsing and resolving message link: {link}")
@@ -1051,9 +1083,14 @@ async def check_message_link_access(phone: str, link: str) -> bool:
                 messages_obj = await client(request)
 
                 # Check if the message was returned (access granted)
+                # messages_obj could be messages.Messages, messages.MessagesSlice, messages.ChannelMessages etc.
                 if messages_obj and hasattr(messages_obj, 'messages') and messages_obj.messages:
                     log.info(f"[{phone}] Successfully accessed message link: {link}")
                     return True
+                elif messages_obj and hasattr(messages_obj, 'chats') and not hasattr(messages_obj, 'messages'):
+                     # Sometimes only chat info is returned if message is deleted? Check this case.
+                     log.warning(f"[{phone}] Got chat info but no message object for link (deleted?): {link}")
+                     return False
                 else:
                     log.warning(f"[{phone}] Could not fetch message for link (access denied or deleted?): {link}")
                     return False
@@ -1086,7 +1123,16 @@ async def check_message_link_access(phone: str, link: str) -> bool:
 # --- Forwarding Logic ---
 async def _forward_single_message(client, target_peer, source_chat_entity, message_id, fallback_chat_entity=None, fallback_message_id=None):
     """Forwards a single message, handling common errors and fallback."""
-    phone = getattr(client.session.auth_key, 'oid', 'UnknownPhone') # Get phone from session if possible
+    phone = "UnknownPhone"
+    try:
+        # Access session safely
+        if client.session and hasattr(client.session, 'auth_key') and client.session.auth_key:
+             # Get phone number from session data if possible (method might vary)
+             # This is not standard, accessing internal structures. Best effort.
+             auth_key_data = client.session.get_auth_key()
+             if auth_key_data: phone = str(auth_key_data.dc_id) # Placeholder, phone not directly stored
+    except Exception: pass # Ignore errors getting phone
+
     target_id_str = getattr(target_peer, 'id', str(target_peer)) # Get target ID for logging
     source_id_str = getattr(source_chat_entity, 'id', str(source_chat_entity))
 
@@ -1232,13 +1278,15 @@ async def _execute_single_task(instance, task_info):
             else:
                 folder_id = task_info.get('folder_id')
                 if folder_id:
-                    folder_name = db.get_folder_name(folder_id) or f"ID {folder_id}"
+                    # Check if folder still exists before getting groups
+                    folder_name_db = db.get_folder_name(folder_id)
+                    if folder_name_db is None:
+                         log.warning(f"[{task_key}] Target folder ID {folder_id} seems to be deleted or inaccessible. Skipping task run.")
+                         raise ValueError("Target folder deleted or inaccessible.") # Stop the task
+
+                    folder_name = folder_name_db or f"ID {folder_id}" # Use name or ID for log
                     log.info(f"[{task_key}] Target: Folder '{html.escape(folder_name)}' ({folder_id}). Fetching list...")
                     target_ids = db.get_target_groups_by_folder(folder_id)
-                    # Verify folder still exists? DB foreign key should handle SET NULL if deleted.
-                    if folder_name.startswith("ID ") and not db.get_folder_name(folder_id):
-                         log.warning(f"[{task_key}] Target folder ID {folder_id} seems to be deleted. Skipping task run.")
-                         raise ValueError("Target folder deleted.") # Stop the task
                     log.info(f"[{task_key}] Targeting {len(target_ids)} groups from folder '{html.escape(folder_name)}'.")
                 else:
                     raise ValueError("Task config error: No target folder specified and not 'send to all'.")
@@ -1262,6 +1310,7 @@ async def _execute_single_task(instance, task_info):
                         target_peer = await client.get_entity(target_id)
                         if not target_peer:
                              log.warning(f"[{task_key}] Could not resolve target entity for ID {target_id}. Skipping.")
+                             if permanent_error is None: permanent_error = f"Target {target_id}: Not Found/Inaccessible"
                              continue # Skip this target
 
                         fwd_ok, fwd_err = await _forward_single_message(
@@ -1357,7 +1406,8 @@ async def run_check_tasks_periodically():
                          runtime['loop'].create_task(_execute_single_task(runtime, task))
                          scheduled_count += 1
                          # Small delay between scheduling tasks for the *same* bot? Unlikely needed due to lock.
-                    await asyncio.sleep(random.uniform(0.05, 0.2)) # Small delay between *different* bots
+                    # Small delay between scheduling batches for *different* bots
+                    if not _stop_event.is_set(): await asyncio.sleep(random.uniform(0.05, 0.2))
 
         except sqlite3.Error as db_e:
             log.exception(f"Database error during task check cycle: {db_e}")
@@ -1433,11 +1483,11 @@ def shutdown_telethon():
     if not phones:
         log.info("No active runtimes to stop.")
         # Wait a moment for task checker thread to potentially exit cleanly
-        # Find the checker thread? Hard without storing it globally. Assume it checks _stop_event.
-        # time.sleep(2)
+        # Finding the checker thread might be complex without storing it globally. Assume it checks _stop_event.
+        time.sleep(1) # Brief pause
         return
 
-    # Stop runtimes concurrently? Might be complex with thread joins. Stop sequentially.
+    # Stop runtimes concurrently? Might be complex with thread joins. Stop sequentially for safety.
     log.info("Stopping userbot runtimes sequentially...")
     stopped_count = 0
     for phone in phones:
