@@ -25,16 +25,19 @@ LOG_BACKUP_COUNT = 5  # Number of old log files to keep
 
 # --- Compatibility Shim ---
 # Fake 'imghdr' module for Python 3.11+ compatibility where imghdr is deprecated
+# Define logger for this shim AFTER main logging setup if possible, or use basic print/stderr
+# Using a placeholder name for now, will assign logger later if needed.
+_imghdr_compat_logger = None
 try:
     import imghdr
-    log_imghdr = logging.getLogger('imghdr_compat')
-    log_imghdr.debug("Using system 'imghdr' module.")
+    # Can't use log object yet
+    print("DEBUG: Using system 'imghdr' module.")
 except ImportError:
-    log_imghdr = logging.getLogger('imghdr_compat')
-    log_imghdr.debug("System 'imghdr' not found, creating compatibility shim.")
+    print("DEBUG: System 'imghdr' not found, creating compatibility shim.")
     imghdr_module = types.ModuleType('imghdr')
     def what(file, h=None):
         """Basic file type check using 'filetype' as a replacement for imghdr.what."""
+        global _imghdr_compat_logger
         try:
             buf = None
             # Read a small chunk for type detection
@@ -62,11 +65,15 @@ except ImportError:
                  return 'jpeg' if kind.extension == 'jpg' else kind.extension
             return None # Return None if not a recognized image type
         except Exception as e:
-             log_imghdr.warning(f"Error during 'what' compatibility check: {e}")
+             # Use logger only if it has been initialized
+             if _imghdr_compat_logger:
+                  _imghdr_compat_logger.warning(f"Error during 'what' compatibility check: {e}")
+             else:
+                  print(f"WARNING: Error during 'what' compatibility check: {e}", file=sys.stderr)
              return None
     imghdr_module.what = what
     sys.modules['imghdr'] = imghdr_module
-    log_imghdr.info("Using 'filetype' based compatibility shim for 'imghdr'.")
+    print("INFO: Using 'filetype' based compatibility shim for 'imghdr'.")
 
 
 # --- Data Directory Setup ---
@@ -80,6 +87,7 @@ SESSION_DIR = os.path.join(DATA_DIR, SESSION_SUBDIR)
 
 # --- Environment Variable Loading & Validation ---
 # Defined early so logging setup can use it if needed
+# ** REMOVED log calls from this function **
 def load_env_var(name, required=True, cast_func=str, default=None):
     """Loads an environment variable, raises ValueError if required and missing."""
     value = os.environ.get(name)
@@ -87,9 +95,9 @@ def load_env_var(name, required=True, cast_func=str, default=None):
         if required and default is None:
             raise ValueError(f"CRITICAL: Required environment variable '{name}' is not set.")
         value = default # Use default if not required or default is provided
-        log.debug(f"Env var '{name}' not set, using default: '{default}'")
+        # print(f"DEBUG: Env var '{name}' not set, using default: '{default}'") # Optional: Use print for debugging before logging is up
     else: # Value exists
-        log.debug(f"Env var '{name}' found.")
+        # print(f"DEBUG: Env var '{name}' found.") # Optional: Use print for debugging before logging is up
         if cast_func: # Cast only if value exists and cast_func is provided
             try:
                 return cast_func(value)
@@ -104,10 +112,7 @@ try:
     admin_ids_str = load_env_var('ADMIN_IDS', required=False, cast_func=str, default='')
     # Ensure IDs are integers and handle potential whitespace/empty strings
     ADMIN_IDS = [int(id_.strip()) for id_ in admin_ids_str.split(',') if id_.strip().isdigit()]
-    if not ADMIN_IDS and admin_ids_str: # Log if input was given but non were valid ints
-        log.warning(f"ADMIN_IDS provided ('{admin_ids_str}') but contained no valid integer IDs.")
-    elif not ADMIN_IDS:
-         log.warning("ADMIN_IDS environment variable is not set or empty. Admin features will be disabled.")
+
 
 except ValueError as e:
     # Use basic print here as logging might not be fully configured yet
@@ -177,8 +182,17 @@ logging.basicConfig(
     handlers=handlers_list,
     format='%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] - %(message)s' # BasicConfig needs format too if setting here
 )
-log = logging.getLogger(__name__) # Use this logger in other modules: from config import log
+# --- Define the main log object HERE ---
+log = logging.getLogger(__name__)
+# --- Assign logger to imghdr shim now that it exists ---
+_imghdr_compat_logger = logging.getLogger('imghdr_compat')
+
+# --- Log initial config status AFTER logging is set up ---
 log.info(f"Logging configured. Stream level: {log_level_str}. File logging: {'Enabled' if file_handler else 'Disabled'}")
+if not ADMIN_IDS and admin_ids_str: # Log if input was given but non were valid ints
+    log.warning(f"ADMIN_IDS provided ('{admin_ids_str}') but contained no valid integer IDs.")
+elif not ADMIN_IDS:
+     log.warning("ADMIN_IDS environment variable is not set or empty. Admin features will be disabled.")
 
 
 # --- Ensure Session Subdirectory Exists (AFTER Logging is setup) ---
@@ -258,8 +272,8 @@ except pytz.UnknownTimeZoneError as e:
     STATE_ADMIN_CONFIRM_USERBOT_RESET, # State for confirming userbot reset (Not currently used)
     STATE_WAITING_FOR_START_TIME, # State for task start time input
     # Add any new states here if needed
-) = map(str, range(27)) # Adjusted range to 27 (0-26) if STATE_ADMIN_CONFIRM_USERBOT_RESET isn't used yet. Let's keep 28 (0-27) for now to match definition.
-# (0 to 27) = 28 states defined. Looks consistent with handlers.py usage.
+) = map(str, range(27)) # Range 0-26. If 28 states needed, use range(28). Check handlers.py state usage.
+# Counted 27 state variables defined above. range(27) covers 0-26.
 
 # --- Callback Data Prefixes ---
 # Using prefixes helps route callbacks efficiently in a single handler function
@@ -277,7 +291,8 @@ CALLBACK_GENERIC_PREFIX = "generic_" # For simple actions like back buttons, con
 # --- Utility Functions ---
 def is_admin(user_id: int) -> bool:
     """Checks if a given user ID is in the ADMIN_IDS list."""
-    return user_id in ADMIN_IDS
+    # Ensure ADMIN_IDS exists and user_id is an integer before checking
+    return isinstance(user_id, int) and ADMIN_IDS and user_id in ADMIN_IDS
 
 log.info("Configuration loaded successfully.")
 # --- END OF FILE config.py ---
