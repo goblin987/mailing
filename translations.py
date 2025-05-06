@@ -332,7 +332,6 @@ translations = {
         'admin_assignbots_db_error': "⚙️ Failed to assign userbots in database.",
         'admin_assignbots_failed': "❌ Failed to assign any userbots to client <code>{code}</code>. Check bot availability and logs.",
 
-
         # --- Admin Logs ---
         'admin_logs_title': "<b>📜 Recent System Logs (Last {limit}):</b>",
         'admin_logs_line': "<code>{time}</code> | {event} | User: <code>{user}</code> | Bot: <code>{bot}</code> | {details}",
@@ -346,6 +345,37 @@ translations = {
         'conversation_fallback': "❓ Unrecognized command or input in the current context. Action cancelled. Please start again using /start or /admin.",
         'internal_error_log': "An internal error occurred in state {state}. User: {user_id}. Error: {error}", # For logging only
 
+        # Admin Task Management
+        'admin_button_manage_tasks': '📋 Manage Tasks',
+        'admin_button_view_tasks': '📊 View Tasks',
+        'admin_task_list_title': '📋 Task List',
+        'admin_task_list_empty': 'No tasks configured yet.',
+        'admin_task_list_entry': '''
+Task #{task_id}
+Status: {status}
+Message: {message}
+Target: {target}
+Schedule: {schedule}
+Last Run: {last_run}
+Next Run: {next_run}
+''',
+        'admin_task_manage_title': '📋 Task Management',
+        'admin_task_create_button': '➕ Create New Task',
+        'admin_task_edit_button': '✏️ Edit Task',
+        'admin_task_delete_button': '🗑️ Delete Task',
+        'admin_task_toggle_button': '🔄 Toggle Status',
+        'admin_task_select_bot': 'Select a userbot for this task:',
+        'admin_task_no_bots': 'No userbots available. Add a userbot first.',
+        'admin_task_enter_message': 'Enter the message to be posted:',
+        'admin_task_enter_schedule': 'Enter the schedule in cron format (e.g., "0 9 * * *" for daily at 9 AM):',
+        'admin_task_invalid_schedule': '⚠️ Invalid schedule format. Please use cron format (e.g., "0 9 * * *").',
+        'admin_task_enter_target': 'Enter the target group username or ID:',
+        'admin_task_invalid_target': '⚠️ Invalid target. Please enter a valid group username or ID.',
+        'admin_task_created': '✅ Task created successfully!',
+        'admin_task_updated': '✅ Task updated successfully!',
+        'admin_task_deleted': '✅ Task deleted successfully!',
+        'admin_task_toggled': '✅ Task status toggled successfully!',
+        'admin_task_error': '⚠️ An error occurred while managing the task. Please try again.',
     },
     # --- Lithuanian Translations (Example stubs - NEEDS FULL TRANSLATION) ---
     'lt': {
