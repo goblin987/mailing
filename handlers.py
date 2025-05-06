@@ -39,7 +39,7 @@ from config import (
     # Callback Prefixes
     CALLBACK_ADMIN_PREFIX, CALLBACK_CLIENT_PREFIX, CALLBACK_TASK_PREFIX,
     CALLBACK_FOLDER_PREFIX, CALLBACK_JOIN_PREFIX, CALLBACK_LANG_PREFIX,
-    # CALLBACK_REMOVE_PREFIX, # *** REMOVED THIS LINE ***
+    # CALLBACK_REMOVE_PREFIX, # Removed this import
     CALLBACK_INTERVAL_PREFIX, CALLBACK_GENERIC_PREFIX
 )
 from translations import get_text, language_names, translations
@@ -133,7 +133,7 @@ async def reply_or_edit_text(update: Update, context: CallbackContext, text: str
     # Try to get message_id for editing
     if update.callback_query:
         message_id = update.callback_query.message.message_id
-    elif 'message_id' in context.user_data: # Check if we stored it for editing
+    elif context.user_data and 'message_id' in context.user_data: # Check if we stored it for editing
         message_id = context.user_data.get(CTX_MESSAGE_ID)
 
     # Ensure reply_markup is properly handled
@@ -465,7 +465,8 @@ async def client_menu(update: Update, context: CallbackContext) -> int:
     # If called from a callback, make sure context is clean before showing menu
     if update.callback_query:
         clear_conversation_data(context)
-        lang = context.user_data[CTX_LANG] # Re-fetch lang
+        # Re-fetch lang after clearing, as clear_conversation_data preserves it
+        lang = context.user_data.get(CTX_LANG, 'en')
 
     message, markup, parse_mode = build_client_menu(user_id, context)
     await reply_or_edit_text(update, context, message, reply_markup=markup, parse_mode=parse_mode)
@@ -586,7 +587,10 @@ async def process_admin_api_hash(update: Update, context: CallbackContext) -> st
              log.warning(f"Userbot {phone} is already authorized. Session file likely exists. Ensuring DB record.")
              # Ensure DB record exists or update status
              if not db.find_userbot(phone):
-                 session_file_rel = f"{re.sub(r'[^\\d]', '', phone)}.session" # Ensure safe filename
+                 # Calculate safe filename part first
+                 safe_phone_part = re.sub(r'[^\d]', '', phone) # Remove non-digits
+                 if not safe_phone_part: safe_phone_part = f"unknown_{random.randint(1000,9999)}"
+                 session_file_rel = f"{safe_phone_part}.session"
                  db.add_userbot(phone, session_file_rel, api_id, api_hash, 'active')
              else:
                  db.update_userbot_status(phone, 'active') # Mark as active if exists
@@ -697,6 +701,8 @@ async def process_admin_userbot_password(update: Update, context: CallbackContex
     password = update.message.text.strip() # Password itself might have spaces
     auth_data = context.user_data.get(CTX_AUTH_DATA)
     phone = context.user_data.get(CTX_PHONE, "N/A")
+    api_id = context.user_data.get(CTX_API_ID) # Need these for DB save
+    api_hash = context.user_data.get(CTX_API_HASH) # Need these for DB save
 
     if not auth_data:
         await reply_or_edit_text(update, context, get_text(user_id, 'session_expired', lang=lang))
@@ -721,6 +727,21 @@ async def process_admin_userbot_password(update: Update, context: CallbackContex
             phone_num = comp_data.get('phone', phone)
             username = comp_data.get('username')
             display_name = f"@{username}" if username else phone_num
+
+            # --- **FIXED:** Calculate session_file_rel correctly here too ---
+            safe_phone_part = re.sub(r'[^\d]', '', phone_num)
+            if not safe_phone_part: safe_phone_part = f"unknown_{random.randint(1000,9999)}"
+            session_file_rel = f"{safe_phone_part}.session"
+            # --- End Fix ---
+
+            # Use the add_userbot function which handles inserts/updates
+            db_ok = db.add_userbot(phone_num, session_file_rel, api_id, api_hash, 'active', username, None, None)
+            if db_ok:
+                 log.info(f"Userbot {phone_num} added/updated in DB after password auth.")
+            else:
+                 log.error(f"Auth OK for {phone_num}, but DB add/update failed.")
+                 # Continue anyway, but log the error
+
             await reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_add_success', lang=lang, display_name=display_name))
             # Trigger runtime initialization
             asyncio.create_task(telethon_api.get_userbot_runtime_info(phone_num))
@@ -968,7 +989,8 @@ async def process_admin_add_bots_count(update: Update, context: CallbackContext)
 async def client_folder_menu(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
     clear_conversation_data(context) # Clear previous state
-    lang = context.user_data[CTX_LANG] # Re-fetch lang
+    # Re-fetch lang after clearing, as clear_conversation_data preserves it
+    lang = context.user_data.get(CTX_LANG, 'en')
 
     folders = db.get_folders_by_user(user_id)
 
@@ -1171,7 +1193,7 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
             # If ID resolved, proceed to add
             if group_id:
                  added = db.add_target_group(group_id, group_name, link, user_id, folder_id)
-                 if added: status_code = 'added'; added_count += 1
+                 if added is True: status_code = 'added'; added_count += 1
                  elif added is False: status_code = 'ignored'; ignored_count += 1 # False from DB means duplicate ignored
                  else: status_code = 'failed'; reason = get_text(user_id, 'folder_add_db_error', lang=lang); failed_count += 1 # Should not happen often
             else:
@@ -1612,10 +1634,11 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
                   reason_key = f"join_results_reason_{detail['reason']}"
                   reason_text = get_text(user_id, reason_key, lang=lang, error=detail.get('error', ''), seconds=detail.get('seconds', ''))
                   if reason_text == reason_key: reason_text = html.escape(str(detail.get('reason'))) # Fallback if reason key missing
-                  status_text = get_text(user_id, 'join_results_failed', lang=lang, reason=reason_text) # Embed reason in 'failed' message
+                  # Embed reason in 'failed' message format
+                  status_text = get_text(user_id, 'join_results_failed', lang=lang, reason=reason_text)
              elif status == 'flood_wait' and isinstance(detail, dict):
+                  # Use specific flood wait message format
                   status_text = get_text(user_id, 'join_results_flood_wait', lang=lang, seconds=detail.get('seconds', '?'))
-
 
              # Ensure link is escaped for display
              escaped_link = html.escape(link)
@@ -1726,7 +1749,15 @@ async def task_show_settings_menu(update: Update, context: CallbackContext) -> i
     start_time_str = format_dt(start_time_ts, fmt='%H:%M') # Show only time
 
     interval_min = current_settings.get('repetition_interval')
-    interval_str = get_text(user_id, 'task_interval_button', lang=lang, value=f"{interval_min} min") if interval_min else get_text(user_id, 'task_value_not_set', lang=lang)
+    # Format interval nicely for display
+    if interval_min:
+         if interval_min < 60: interval_disp = f"{interval_min} min"
+         elif interval_min % (60*24) == 0: interval_disp = f"{interval_min // (60*24)} d"
+         else: interval_disp = f"{interval_min // 60} h"
+         interval_str = get_text(user_id, 'task_interval_button', lang=lang, value=interval_disp)
+    else:
+         interval_str = get_text(user_id, 'task_value_not_set', lang=lang)
+
 
     target_str = get_text(user_id, 'task_value_not_set', lang=lang)
     if current_settings.get('send_to_all_groups'):
@@ -2753,14 +2784,14 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
             next_state = ConversationHandler.END # End conversation for unknown buttons
 
         # Default answer if handler didn't answer and it wasn't noop
-        if query and not query.answered and CALLBACK_GENERIC_PREFIX+"noop" not in data:
+        if query and hasattr(query, 'answer') and not query.answered and CALLBACK_GENERIC_PREFIX+"noop" not in data:
              try: await query.answer()
              except Exception: pass
 
     except Exception as e:
         log.error(f"Error processing callback data '{data}' for user {user_id}: {e}", exc_info=True)
         try:
-             await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+             if query and hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
         except Exception: pass
         await reply_or_edit_text(update, context, get_text(user_id, 'error_generic', lang=lang))
         clear_conversation_data(context)
@@ -2792,7 +2823,7 @@ client_folder_states = {
     STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)], # Handles button presses within edit menu
     STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename)],
     STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)], # Handles selecting groups to remove
-    STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_links)], # Used for adding links to folder
+    STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_links)], # Used for adding links to folder AND joining groups
 }
 
 client_task_states = {
@@ -2801,12 +2832,6 @@ client_task_states = {
      STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'fallback'))],
      STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_start_time)],
      STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler)], # Selecting folder as target
-}
-
-client_join_states = {
-     # Joins use STATE_WAITING_FOR_GROUP_LINKS but it's also used by folder add.
-     # The context (CTX_SELECTED_BOTS vs CTX_FOLDER_ID) determines behavior.
-     # Consider separate states if logic diverges significantly.
 }
 
 # --- Main Conversation Handler ---
@@ -2826,9 +2851,8 @@ main_conversation = ConversationHandler(
         **admin_manage_states,
 
         # Client States (Folder, Task, Join)
-        **client_folder_states, # Includes waiting for group links for folders
+        **client_folder_states, # Includes waiting for group links for folders and join
         **client_task_states,
-        # Join uses STATE_WAITING_FOR_GROUP_LINKS handled in client_folder_states
 
         # State for Bot Selection (used by multiple flows)
         STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
@@ -2855,7 +2879,3 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded with implemented functions.")
-# --- END OF FILE handlers.py ---
-```
-
-Please deploy this updated `handlers.py`. Hopefully, this resolves the import error, and the bot should now start without crashing during the import phase.
