@@ -197,7 +197,6 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
             try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang), parse_mode=parse_mode)
             except Exception as send_e: log.error(f"Failed to send fallback error msg after unexpected error to user {user_id}: {send_e}")
 
-
 # --- PTB Generic Error Handler ---
 async def error_handler(update: object, context: CallbackContext) -> None:
     """Log Errors caused by Updates and notify user."""
@@ -210,7 +209,6 @@ async def error_handler(update: object, context: CallbackContext) -> None:
         await _send_or_edit_message(update, context, error_message) # Use internal helper
     if hasattr(context, 'user_data'):
          clear_conversation_data(context)
-
 
 # --- Format Timestamp Helper ---
 def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> str:
@@ -412,7 +410,7 @@ async def process_admin_userbot_password(update: Update, context: CallbackContex
             await _send_or_edit_message(update, context, get_text(user_id, key, lang=lang, **locals_for_format)); clear_conversation_data(context); return ConversationHandler.END
     except Exception as e: log.error(f"Exception during complete_authentication_flow (password) for {phone}: {e}", exc_info=True); context.user_data.pop(CTX_AUTH_DATA, None); await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); clear_conversation_data(context); return ConversationHandler.END
 
-# --- Admin - Other Flows --- (Keep async) ...
+# --- Admin - Other Flows ---
 async def process_admin_invite_details(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); details_text = update.message.text.strip().lower(); match = re.match(r'(\d+)\s*d\s+(\d+)\s*b', details_text)
     if not match: await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_format', lang=lang)); return STATE_WAITING_FOR_SUB_DETAILS
@@ -528,11 +526,24 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
         group_id = None; group_name = None; reason = None; status_code = 'failed'; resolved = link_details.get(link)
         if resolved and not resolved.get('error'):
             group_id = resolved.get('id'); group_name = resolved.get('name')
-            if group_id: added_status = db.add_target_group(group_id, group_name, link, user_id, folder_id);
-            if added_status is True: status_code = 'added'; added_count += 1
-            elif added_status is False: status_code = 'ignored'; ignored_count += 1
-            else: status_code = 'failed'; reason = get_text(user_id, 'folder_add_db_error', lang=lang); failed_count += 1
-            else: status_code = 'failed'; reason = get_text(user_id, 'folder_resolve_error', lang=lang) + " (No ID)"; failed_count += 1
+            if group_id:
+                 added_status = db.add_target_group(group_id, group_name, link, user_id, folder_id)
+                 if added_status is True:
+                     status_code = 'added'
+                     added_count += 1
+                 elif added_status is False:
+                     status_code = 'ignored'
+                     ignored_count += 1
+                 else: # DB error
+                     status_code = 'failed'
+                     reason = get_text(user_id, 'folder_add_db_error', lang=lang)
+                     failed_count += 1
+            else:
+                 # *** Corrected this block ***
+                 status_code = 'failed'
+                 reason = get_text(user_id, 'folder_resolve_error', lang=lang) + " (No ID)"
+                 failed_count += 1
+                 # *** End Correction ***
         elif resolved and resolved.get('error'): status_code = 'failed'; reason = resolved.get('error'); failed_count += 1
         else: status_code = 'failed'; reason = get_text(user_id, 'folder_resolve_error', lang=lang); failed_count += 1
         results[link] = {'status': status_code, 'reason': reason}
@@ -652,7 +663,7 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
         all_results_text += "\n" + get_text(user_id, 'join_results_bot_header', lang=lang, display_name=bot_display_name)
         if isinstance(result_item, Exception): log.error(f"Join batch task for {phone} raised exception: {result_item}"); all_results_text += f"\n  -> {get_text(user_id, 'error_generic', lang=lang)} ({html.escape(str(result_item))})"; continue
         error_info, results_dict = result_item
-        # *** FIXED SYNTAX ERROR HERE ***
+        # *** CORRECTED SYNTAX HERE ***
         if error_info and error_info.get("error"):
             error_message_detail = error_info['error']
             log.error(f"Join batch error for {phone}: {error_message_detail}")
@@ -1098,3 +1109,4 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded with implemented functions.")
+# --- END OF FILE handlers.py ---
