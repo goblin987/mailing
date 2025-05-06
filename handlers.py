@@ -532,10 +532,7 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
                  elif added_status is False: status_code = 'ignored'; ignored_count += 1
                  else: status_code = 'failed'; reason = get_text(user_id, 'folder_add_db_error', lang=lang); failed_count += 1
             else:
-                 # Corrected Syntax Block
-                 status_code = 'failed'
-                 reason = get_text(user_id, 'folder_resolve_error', lang=lang) + " (No ID)"
-                 failed_count += 1
+                 status_code = 'failed'; reason = get_text(user_id, 'folder_resolve_error', lang=lang) + " (No ID)"; failed_count += 1
         elif resolved and resolved.get('error'): status_code = 'failed'; reason = resolved.get('error'); failed_count += 1
         else: status_code = 'failed'; reason = get_text(user_id, 'folder_resolve_error', lang=lang); failed_count += 1
         results[link] = {'status': status_code, 'reason': reason}
@@ -655,11 +652,13 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
         all_results_text += "\n" + get_text(user_id, 'join_results_bot_header', lang=lang, display_name=bot_display_name)
         if isinstance(result_item, Exception): log.error(f"Join batch task for {phone} raised exception: {result_item}"); all_results_text += f"\n  -> {get_text(user_id, 'error_generic', lang=lang)} ({html.escape(str(result_item))})"; continue
         error_info, results_dict = result_item
+        # Corrected Syntax Block
         if error_info and error_info.get("error"):
             error_message_detail = error_info['error']
             log.error(f"Join batch error for {phone}: {error_message_detail}")
             generic_error_text = get_text(user_id, 'error_generic', lang=lang)
             all_results_text += f"\n  -> {generic_error_text} ({html.escape(error_message_detail)})"
+        # End Corrected Syntax Block
         if not results_dict: all_results_text += f"\n  -> ({get_text(user_id, 'error_no_results', lang=lang)})"; continue
         processed_links_count = 0
         for link, (status, detail) in results_dict.items():
@@ -729,14 +728,51 @@ async def process_task_link(update: Update, context: CallbackContext, link_type:
     if link_type == 'fallback' and link_text.lower() == 'skip': task_settings['fallback_message_link'] = None; await _send_or_edit_message(update, context, get_text(user_id, 'task_set_skipped_fallback', lang=lang)); return await task_show_settings_menu(update, context)
     link_parsed_type, _ = telethon_api.parse_telegram_url_simple(link_text)
     if link_parsed_type != "message_link": await _send_or_edit_message(update, context, get_text(user_id, 'task_error_invalid_link', lang=lang)); return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
-    try: log.info(f"Verifying link access for {link_text} via bot {phone}..."); accessible = await telethon_api.check_message_link_access(phone, link_text)
-    # Correctly indented block
-    if not accessible: log.warning(f"Link {link_text} not accessible by bot {phone}."); await _send_or_edit_message(update, context, get_text(user_id, 'task_error_link_unreachable', lang=lang, bot_phone=phone)); return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
-    else: log.info(f"User {user_id} link {link_text} verified successfully by bot {phone}.") # Continue execution
-    except Exception as e: log.error(f"Error checking link access {phone} -> {link_text}: {e}"); await _send_or_edit_message(update, context, get_text(user_id, 'error_telegram_api', lang=lang, error=str(e))); return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
-    # Store link logic is now outside the try block
-    if link_type == 'primary': task_settings['message_link'] = link_text; await _send_or_edit_message(update, context, get_text(user_id, 'task_set_success_msg', lang=lang)); return await task_show_settings_menu(update, context)
-    else: task_settings['fallback_message_link'] = link_text; await _send_or_edit_message(update, context, get_text(user_id, 'task_set_success_fallback', lang=lang)); return await task_show_settings_menu(update, context)
+
+    link_verified = False # Flag to track if link check was successful
+    try:
+        log.info(f"Verifying link access for {link_text} via bot {phone}...")
+        # await _send_or_edit_message(update, context, get_text(user_id, 'task_verifying_link', lang=lang)) # Can add this back later if needed
+        accessible = await telethon_api.check_message_link_access(phone, link_text)
+
+        # *** CORRECTED INDENTATION AND LOGIC ***
+        if not accessible:
+            log.warning(f"Link {link_text} not accessible by bot {phone}.")
+            await _send_or_edit_message(update, context, get_text(user_id, 'task_error_link_unreachable', lang=lang, bot_phone=phone))
+            # Stay in the same state if not accessible
+            return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
+        else:
+            # Link is accessible, set flag to proceed
+            log.info(f"User {user_id} link {link_text} verified successfully by bot {phone}.")
+            link_verified = True
+            # Don't return here, proceed to store the link outside the try block
+            pass # Continue execution after the try...except block
+
+    except Exception as e:
+         log.error(f"Error checking link access {phone} -> {link_text}: {e}")
+         await _send_or_edit_message(update, context, get_text(user_id, 'error_telegram_api', lang=lang, error=str(e)))
+         # Stay in the same state if link check fails due to an unexpected error
+         return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
+
+    # --- Store the link (only if link_verified is True) ---
+    if link_verified:
+        if link_type == 'primary':
+            task_settings['message_link'] = link_text
+            await _send_or_edit_message(update, context, get_text(user_id, 'task_set_success_msg', lang=lang))
+            # Go back to menu instead of asking fallback for simplicity now
+            return await task_show_settings_menu(update, context)
+        else: # Fallback
+            task_settings['fallback_message_link'] = link_text
+            await _send_or_edit_message(update, context, get_text(user_id, 'task_set_success_fallback', lang=lang))
+            # Return to task menu
+            return await task_show_settings_menu(update, context)
+    else:
+        # This part should technically not be reached if errors return a state above,
+        # but added as a safeguard.
+        log.error(f"Link verification did not complete successfully for {link_text}. Not storing link.")
+        await _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang)) # Generic error
+        return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
+
 
 async def task_prompt_start_time(update: Update, context: CallbackContext) -> int:
      query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); local_tz_name = LITHUANIA_TZ.zone if hasattr(LITHUANIA_TZ, 'zone') else 'Europe/Vilnius'; text = get_text(user_id, 'task_prompt_start_time', lang=lang, timezone_name=local_tz_name); keyboard = [[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_task_menu")]]; markup = InlineKeyboardMarkup(keyboard); await _send_or_edit_message(update, context, text, reply_markup=markup); return STATE_WAITING_FOR_START_TIME
@@ -898,10 +934,18 @@ async def admin_view_subscriptions(update: Update, context: CallbackContext) -> 
     total_items = len(subs); start_index = current_page * ITEMS_PER_PAGE; end_index = start_index + ITEMS_PER_PAGE; subs_page = subs[start_index:end_index]
     text = f"<b>{get_text(user_id, 'admin_subs_title', lang=lang)}</b> (Page {current_page + 1}/{math.ceil(total_items / ITEMS_PER_PAGE)})\n\n"
     for sub in subs_page:
-        client_user_id = sub['user_id']; user_link = f"ID: `{client_user_id}`"
+        client_user_id = sub['user_id']
+        user_link = f"ID: `{client_user_id}`" # Default value
+        # *** CORRECTED INDENTATION AND LOGIC ***
         if client_user_id:
-             try: user_link = f"<a href='tg://user?id={client_user_id}'>{client_user_id}</a>"
-             except Exception as e: log.debug(f"Could not create user link for {client_user_id}: {e}"); user_link = f"ID: `{client_user_id}` (Inactive?)"
+             try:
+                 user_link = f"<a href='tg://user?id={client_user_id}'>{client_user_id}</a>"
+             except Exception as e:
+                 log.debug(f"Could not create user link for {client_user_id}: {e}")
+                 # Keep the default user_link ("ID: `...`") if try fails
+                 # pass # Default is already set above
+                 user_link = f"ID: `{client_user_id}` (Link Error)" # Or indicate error
+        # *** END CORRECTION ***
         end_date = format_dt(sub['subscription_end']); code = sub['invitation_code']; bot_count = sub['bot_count']
         text += get_text(user_id, 'admin_subs_line', lang=lang, user_link=user_link, code=html.escape(code), end_date=end_date, bot_count=bot_count) + "\n\n"
     keyboard = []; base_callback = f"{CALLBACK_ADMIN_PREFIX}view_subs"; pagination_buttons = build_pagination_buttons(base_callback, current_page, total_items, ITEMS_PER_PAGE); keyboard.extend(pagination_buttons)
@@ -1109,3 +1153,4 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded with implemented functions.")
+# --- END OF FILE handlers.py ---
