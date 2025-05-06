@@ -302,6 +302,10 @@ def build_admin_menu(user_id, context: CallbackContext):
             InlineKeyboardButton(get_text(user_id, 'admin_button_remove_userbot', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}remove_bot_select?page=0")
         ],
         [InlineKeyboardButton(get_text(user_id, 'admin_button_list_userbots', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}list_bots?page=0")],
+        [
+            InlineKeyboardButton(get_text(user_id, 'admin_button_manage_tasks', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}manage_tasks"),
+            InlineKeyboardButton(get_text(user_id, 'admin_button_view_tasks', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_tasks?page=0")
+        ],
         [InlineKeyboardButton(get_text(user_id, 'admin_button_gen_invite', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}gen_invite_prompt")],
         [InlineKeyboardButton(get_text(user_id, 'admin_button_view_subs', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_subs?page=0")],
         [
@@ -1310,6 +1314,10 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> str
     action = "" 
     if data.startswith(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirm_"): action = "remove_bot_confirm"
     elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_"): action = "remove_bot_confirmed"
+    elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}task_options_"): action = "task_options"
+    elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}toggle_task_"): action = "toggle_task"
+    elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}delete_task_"): action = "delete_task"
+    elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}select_task_bot_"): action = "select_task_bot"
     else: action = data.split(CALLBACK_ADMIN_PREFIX)[1].split('?')[0]
     
     log.debug(f"Admin Callback Route: Action='{action}', Data='{data}'")
@@ -1319,17 +1327,16 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> str
             _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_prompt_phone', lang=lang))
             return STATE_WAITING_FOR_PHONE
         elif action == "remove_bot_select":
-            context.dispatcher.run_async(admin_select_userbot_to_remove, update, context)
-            return None
+            return admin_select_userbot_to_remove(update, context)
+        elif action == "remove_bot_confirm":
+            return admin_confirm_remove_userbot(update, context)
+        elif action == "remove_bot_confirmed":
+            return admin_remove_userbot_confirmed(update, context)
         elif action == "list_bots":
-            context.dispatcher.run_async(admin_list_userbots, update, context)
-            return None
+            return admin_list_userbots(update, context)
         elif action == "gen_invite_prompt":
             _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_prompt_details', lang=lang))
             return STATE_WAITING_FOR_SUB_DETAILS
-        elif action == "view_subs":
-            context.dispatcher.run_async(admin_view_subscriptions, update, context)
-            return None
         elif action == "extend_sub_prompt":
             _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_prompt_code', lang=lang))
             return STATE_WAITING_FOR_EXTEND_CODE
@@ -1337,29 +1344,32 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> str
             _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_prompt_code', lang=lang))
             return STATE_WAITING_FOR_ADD_USERBOTS_CODE
         elif action == "view_logs":
-            context.dispatcher.run_async(admin_view_system_logs, update, context)
-            return None
-        elif action == "remove_bot_confirm":
-            context.dispatcher.run_async(admin_confirm_remove_userbot, update, context)
-            return None
-        elif action == "remove_bot_confirmed":
-            context.dispatcher.run_async(admin_remove_userbot_confirmed, update, context)
-            return None
+            return admin_view_system_logs(update, context)
         elif action == "back_to_menu":
-            clear_conversation_data(context)
             return admin_command(update, context)
+        # New task management actions
+        elif action == "manage_tasks":
+            return admin_task_menu(update, context)
+        elif action == "view_tasks":
+            return admin_view_tasks(update, context)
+        elif action == "create_task":
+            return admin_create_task_start(update, context)
+        elif action == "task_options":
+            return admin_task_options(update, context)
+        elif action == "toggle_task":
+            return admin_toggle_task(update, context)
+        elif action == "delete_task":
+            return admin_delete_task(update, context)
+        elif action == "select_task_bot":
+            return admin_select_task_bot(update, context)
         else:
-            log.warning(f"Unhandled ADMIN CB: Action='{action}', Data='{data}'")
-            if query_id and not context.bot_data.get(f'answered_{query_id}', False):
-                context.dispatcher.run_async(query.answer, "Action not recognized.", show_alert=True)
-                context.bot_data[f'answered_{query_id}'] = True
-            return None
+            log.warning(f"Unknown admin callback action: {action}")
+            _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang))
+            return ConversationHandler.END
     except Exception as e:
-        log.error(f"handle_admin_callback error: {e}", exc_info=True)
-        if query_id and not context.bot_data.get(f'answered_{query_id}', False):
-            context.dispatcher.run_async(query.answer, get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-            context.bot_data[f'answered_{query_id}'] = True
-        return None
+        log.error(f"Error in admin callback handler: {e}", exc_info=True)
+        _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang))
+        return ConversationHandler.END
 
 async def handle_folder_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; action = data.split(CALLBACK_FOLDER_PREFIX)[1].split('?')[0]; query_id = query.id
@@ -1546,6 +1556,9 @@ main_conversation = ConversationHandler(
         STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_start_time)],
         STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
+        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_message)],
+        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_schedule)],
+        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_target)],
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private),
@@ -1560,3 +1573,250 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded with corrected sync/async definitions.")
+
+# Add new states for admin task management
+STATE_ADMIN_TASK_MESSAGE = 'STATE_ADMIN_TASK_MESSAGE'
+STATE_ADMIN_TASK_SCHEDULE = 'STATE_ADMIN_TASK_SCHEDULE'
+STATE_ADMIN_TASK_TARGET = 'STATE_ADMIN_TASK_TARGET'
+
+def admin_task_menu(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    keyboard = [
+        [InlineKeyboardButton(get_text(user_id, 'admin_task_create_button', lang=lang), 
+                            callback_data=f"{CALLBACK_ADMIN_PREFIX}create_task")],
+        [InlineKeyboardButton(get_text(user_id, 'admin_button_back', lang=lang), 
+                            callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    _send_or_edit_message(
+        update, context,
+        get_text(user_id, 'admin_task_manage_title', lang=lang),
+        reply_markup=markup
+    )
+    return ConversationHandler.END
+
+def admin_view_tasks(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    page = 0
+    if update.callback_query and '?' in update.callback_query.data:
+        page = int(update.callback_query.data.split('page=')[1])
+    
+    tasks, total = db.get_admin_tasks(page=page)
+    
+    if not tasks:
+        _send_or_edit_message(
+            update, context,
+            get_text(user_id, 'admin_task_list_empty', lang=lang),
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(get_text(user_id, 'admin_button_back', lang=lang),
+                                   callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")
+            ]])
+        )
+        return ConversationHandler.END
+    
+    message = f"<b>{get_text(user_id, 'admin_task_list_title', lang=lang)}</b>\n\n"
+    keyboard = []
+    
+    for task in tasks:
+        status = '✅' if task['status'] == 'active' else '❌'
+        message += get_text(user_id, 'admin_task_list_entry', lang=lang,
+                          task_id=task['id'],
+                          status=status,
+                          message=html.escape(task['message'][:50] + '...' if len(task['message']) > 50 else task['message']),
+                          target=html.escape(task['target']),
+                          schedule=task['schedule'],
+                          last_run=format_dt(task['last_run']) if task['last_run'] else 'Never',
+                          next_run=format_dt(task['next_run']) if task['next_run'] else 'Not scheduled')
+        
+        keyboard.append([
+            InlineKeyboardButton(f"#{task['id']} {status}", callback_data=f"{CALLBACK_ADMIN_PREFIX}task_options_{task['id']}"),
+            InlineKeyboardButton(get_text(user_id, 'admin_task_toggle_button', lang=lang),
+                               callback_data=f"{CALLBACK_ADMIN_PREFIX}toggle_task_{task['id']}")
+        ])
+    
+    # Add pagination
+    pagination = build_pagination_buttons(f"{CALLBACK_ADMIN_PREFIX}view_tasks", page, total, 10, lang)
+    if pagination:
+        keyboard.extend(pagination)
+    
+    # Add back button
+    keyboard.append([InlineKeyboardButton(get_text(user_id, 'admin_button_back', lang=lang),
+                                        callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")])
+    
+    markup = InlineKeyboardMarkup(keyboard)
+    _send_or_edit_message(update, context, message, reply_markup=markup)
+    return ConversationHandler.END
+
+def admin_create_task_start(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    # First, check if there are any userbots available
+    userbots = db.get_all_userbots(assigned_status='active')
+    if not userbots:
+        _send_or_edit_message(update, context, get_text(user_id, 'admin_task_no_bots', lang=lang))
+        return ConversationHandler.END
+    
+    # Show userbot selection menu
+    keyboard = []
+    for bot in userbots:
+        keyboard.append([InlineKeyboardButton(
+            f"📱 {bot['phone_number']} ({bot['username'] or 'No username'})",
+            callback_data=f"{CALLBACK_ADMIN_PREFIX}select_task_bot_{bot['phone_number']}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton(get_text(user_id, 'admin_button_back', lang=lang),
+                                        callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")])
+    
+    markup = InlineKeyboardMarkup(keyboard)
+    _send_or_edit_message(update, context, get_text(user_id, 'admin_task_select_bot', lang=lang),
+                         reply_markup=markup)
+    return ConversationHandler.END
+
+def admin_select_task_bot(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    query = update.callback_query
+    phone = query.data.split('select_task_bot_')[1]
+    
+    # Store the selected phone in context
+    context.user_data['task_userbot_phone'] = phone
+    
+    # Ask for the message
+    _send_or_edit_message(update, context, get_text(user_id, 'admin_task_enter_message', lang=lang))
+    return STATE_ADMIN_TASK_MESSAGE
+
+def admin_process_task_message(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    # Store the message in context
+    context.user_data['task_message'] = update.message.text
+    
+    # Ask for the schedule
+    _send_or_edit_message(update, context, get_text(user_id, 'admin_task_enter_schedule', lang=lang))
+    return STATE_ADMIN_TASK_SCHEDULE
+
+def admin_process_task_schedule(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    schedule = update.message.text.strip()
+    # TODO: Validate cron format
+    
+    # Store the schedule in context
+    context.user_data['task_schedule'] = schedule
+    
+    # Ask for the target
+    _send_or_edit_message(update, context, get_text(user_id, 'admin_task_enter_target', lang=lang))
+    return STATE_ADMIN_TASK_TARGET
+
+def admin_process_task_target(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    target = update.message.text.strip()
+    # TODO: Validate target format
+    
+    # Create the task
+    task_id = db.create_admin_task(
+        userbot_phone=context.user_data['task_userbot_phone'],
+        message=context.user_data['task_message'],
+        schedule=context.user_data['task_schedule'],
+        target=target,
+        created_by=user_id
+    )
+    
+    if task_id:
+        _send_or_edit_message(update, context, get_text(user_id, 'admin_task_created', lang=lang))
+        # Clear task data
+        context.user_data.pop('task_userbot_phone', None)
+        context.user_data.pop('task_message', None)
+        context.user_data.pop('task_schedule', None)
+        # Return to admin menu
+        return admin_command(update, context)
+    else:
+        _send_or_edit_message(update, context, get_text(user_id, 'admin_task_error', lang=lang))
+        return ConversationHandler.END
+
+def admin_task_options(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    query = update.callback_query
+    task_id = int(query.data.split('task_options_')[1])
+    task = db.get_admin_task(task_id)
+    
+    if not task:
+        _send_or_edit_message(update, context, get_text(user_id, 'admin_task_error', lang=lang))
+        return ConversationHandler.END
+    
+    keyboard = [
+        [InlineKeyboardButton(get_text(user_id, 'admin_task_edit_button', lang=lang),
+                            callback_data=f"{CALLBACK_ADMIN_PREFIX}edit_task_{task_id}")],
+        [InlineKeyboardButton(get_text(user_id, 'admin_task_delete_button', lang=lang),
+                            callback_data=f"{CALLBACK_ADMIN_PREFIX}delete_task_{task_id}")],
+        [InlineKeyboardButton(get_text(user_id, 'admin_button_back', lang=lang),
+                            callback_data=f"{CALLBACK_ADMIN_PREFIX}view_tasks?page=0")]
+    ]
+    
+    markup = InlineKeyboardMarkup(keyboard)
+    _send_or_edit_message(update, context,
+                         get_text(user_id, 'admin_task_manage_title', lang=lang),
+                         reply_markup=markup)
+    return ConversationHandler.END
+
+def admin_toggle_task(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    query = update.callback_query
+    task_id = int(query.data.split('toggle_task_')[1])
+    
+    if db.toggle_admin_task_status(task_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'admin_task_toggled', lang=lang))
+    else:
+        _send_or_edit_message(update, context, get_text(user_id, 'admin_task_error', lang=lang))
+    
+    # Return to task list
+    return admin_view_tasks(update, context)
+
+def admin_delete_task(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    query = update.callback_query
+    task_id = int(query.data.split('delete_task_')[1])
+    
+    if db.delete_admin_task(task_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'admin_task_deleted', lang=lang))
+    else:
+        _send_or_edit_message(update, context, get_text(user_id, 'admin_task_error', lang=lang))
+    
+    # Return to task list
+    return admin_view_tasks(update, context)
