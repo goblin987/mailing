@@ -59,34 +59,64 @@ CTX_TASK_SETTINGS = "task_settings"; CTX_PAGE = "page"; CTX_MESSAGE_ID = "messag
 
 def clear_conversation_data(context: CallbackContext):
     """Clears volatile keys from user_data, preserving user_id and lang."""
-    if not hasattr(context, 'user_data') or context.user_data is None: return
-    user_id = context.user_data.get(CTX_USER_ID); lang = context.user_data.get(CTX_LANG)
+    # context.user_data is guaranteed to be a dict.
+    user_id = context.user_data.get(CTX_USER_ID)
+    lang = context.user_data.get(CTX_LANG)
+    
     keys_to_clear = [
         CTX_PHONE, CTX_API_ID, CTX_API_HASH, CTX_AUTH_DATA, CTX_EXTEND_CODE,
         CTX_ADD_BOTS_CODE, CTX_FOLDER_ID, CTX_FOLDER_NAME, CTX_SELECTED_BOTS,
         CTX_TARGET_GROUP_IDS_TO_REMOVE, CTX_TASK_PHONE, CTX_TASK_SETTINGS,
         CTX_PAGE, CTX_MESSAGE_ID
     ]
-    for key in keys_to_clear: context.user_data.pop(key, None)
-    if user_id: context.user_data[CTX_USER_ID] = user_id
-    if lang: context.user_data[CTX_LANG] = lang
+    for key in keys_to_clear:
+        context.user_data.pop(key, None)
+    
+    # Restore essential keys if they were present
+    if user_id is not None:
+        context.user_data[CTX_USER_ID] = user_id
+    if lang is not None:
+        context.user_data[CTX_LANG] = lang
+        
     log.debug(f"Cleared volatile conversation user_data for user {user_id or 'N/A'}")
 
+# **MODIFIED HERE**
 def get_user_id_and_lang(update: Update, context: CallbackContext) -> tuple[int | None, str]:
-    user_id = context.user_data.get(CTX_USER_ID) if context.user_data else None
-    lang = context.user_data.get(CTX_LANG) if context.user_data else None
-    if not user_id and update and update.effective_user:
-        user_id = update.effective_user.id
-        if not context.user_data: context.user_data = {}
-        context.user_data[CTX_USER_ID] = user_id
-    if user_id and not lang:
-        lang = db.get_user_language(user_id)
-        if not context.user_data: context.user_data = {}
-        context.user_data[CTX_LANG] = lang
-    elif not lang: lang = 'en'
-    if lang and user_id and context.user_data and CTX_LANG not in context.user_data:
-        context.user_data[CTX_LANG] = lang
-    return user_id, lang or 'en'
+    # context.user_data is always a dict when persistence is enabled.
+    user_id = context.user_data.get(CTX_USER_ID)
+    lang = context.user_data.get(CTX_LANG)
+
+    # Step 1: Determine user_id and store it in context if found from update
+    if user_id is None:
+        if update and update.effective_user:
+            user_id = update.effective_user.id
+            context.user_data[CTX_USER_ID] = user_id # Store it
+    
+    # Step 2: Determine lang and store it in context if possible
+    if lang is None: # If lang not already in context
+        if user_id is not None: # If we have a user_id (from context or just obtained from update)
+            # db.get_user_language defaults to 'en' if user not found or no lang set
+            lang = db.get_user_language(user_id)
+            context.user_data[CTX_LANG] = lang # Store this lang (from DB or default 'en')
+        else:
+            # No user_id, so lang defaults to 'en'.
+            lang = 'en'
+            # We don't store this default 'en' in context.user_data[CTX_LANG] yet,
+            # as CTX_LANG in user_data is usually associated with a specific user_id.
+            # If user_id becomes known later and lang is still the default 'en',
+            # it can be stored then if needed.
+    
+    # Ensure lang is never None at return, default to 'en' if it somehow is.
+    # This also handles the case where lang was 'en' because user_id was None.
+    final_lang = lang if lang is not None else 'en'
+
+    # If user_id is now known, ensure context reflects the determined language.
+    # This is important if lang was defaulted to 'en' due to user_id being initially unknown.
+    if user_id is not None and context.user_data.get(CTX_LANG) != final_lang:
+        context.user_data[CTX_LANG] = final_lang
+            
+    return user_id, final_lang
+
 
 async def _send_or_edit_message(update: Update, context: CallbackContext, text: str, **kwargs):
     user_id, lang = get_user_id_and_lang(update, context)
@@ -101,7 +131,7 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
     if query:
         message_id = query.message.message_id
         if not chat_id: chat_id = query.from_user.id
-    elif context.user_data and 'message_id' in context.user_data:
+    elif context.user_data and 'message_id' in context.user_data: # Make sure context.user_data exists
         message_id = context.user_data.get(CTX_MESSAGE_ID)
         if not chat_id: chat_id = user_id
 
@@ -123,9 +153,9 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
         elif update.message:
             sent_message = await update.message.reply_text(text=text, **kwargs)
             if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
-        elif message_id and chat_id:
+        elif message_id and chat_id: # Check if chat_id is valid
              await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, **kwargs)
-        else:
+        else: # Check if chat_id is valid
             sent_message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
             if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
     except BadRequest as e:
@@ -137,47 +167,49 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
         elif "message to edit not found" in str(e).lower() or "chat not found" in str(e).lower():
             log.warning(f"Failed to edit (maybe deleted: {message_id}): {e}. Sending new.")
             try:
-                sent_message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-                if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
+                if chat_id: # Ensure chat_id is valid before sending
+                    sent_message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+                    if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
             except Exception as send_e: log.error(f"Failed to send fallback message: {send_e}")
             if context.user_data: context.user_data.pop(CTX_MESSAGE_ID, None)
         elif "reply message not found" in str(e).lower():
              log.warning(f"Failed reply (original deleted?): {e}. Sending standalone.")
              try:
-                 sent_message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-                 if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
+                 if chat_id: # Ensure chat_id is valid
+                     sent_message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+                     if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
              except Exception as send_e: log.error(f"Failed to send fallback standalone: {send_e}")
         else:
             log.error(f"BadRequest sending/editing for user {user_id}: {e}", exc_info=True)
-            try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
-            except Exception as send_e: log.error(f"Failed to send fallback error msg: {send_e}")
+            if chat_id:
+                try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
+                except Exception as send_e: log.error(f"Failed to send fallback error msg: {send_e}")
     except TelegramError as e:
          log.error(f"TelegramError sending/editing for user {user_id}: {e}", exc_info=True)
          if isinstance(e, RetryAfter): log.warning(f"Flood control: Wait {e.retry_after}s.")
-         try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
-         except Exception as send_e: log.error(f"Failed to send fallback error msg after TelegramError: {send_e}")
+         if chat_id:
+             try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
+             except Exception as send_e: log.error(f"Failed to send fallback error msg after TelegramError: {send_e}")
     except Exception as e:
         log.error(f"Unexpected error in _send_or_edit_message for user {user_id}: {e}", exc_info=True)
-        try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
-        except Exception as send_e: log.error(f"Failed to send fallback error msg after unexpected error: {send_e}")
+        if chat_id:
+            try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
+            except Exception as send_e: log.error(f"Failed to send fallback error msg after unexpected error: {send_e}")
 
 async def _show_menu_async(update: Update, context: CallbackContext, menu_builder_func):
     user_id, lang = get_user_id_and_lang(update, context)
     message, markup, parse_mode = menu_builder_func(user_id, context)
     await _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode)
 
-# **MODIFIED HERE: Changed from async def to def**
 def error_handler(update: object, context: CallbackContext) -> None:
     """Log Errors caused by Updates and send a user-friendly message."""
     log.error(f"Exception while handling an update:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_chat:
-        user_id, lang = get_user_id_and_lang(update, context) # Ensure lang is fetched
-        error_message = get_text(user_id, 'error_generic', lang=lang) # Use fetched lang
-        # Use run_async to schedule the coroutine from this synchronous handler
+        user_id, lang = get_user_id_and_lang(update, context) 
+        error_message = get_text(user_id, 'error_generic', lang=lang) 
         context.dispatcher.run_async(_send_or_edit_message, update, context, error_message)
-    elif isinstance(update, str): # Sometimes update is a string, e.g. in job context
+    elif isinstance(update, str): 
         log.error(f"Error handler received string update: {update}")
-        # Cannot send message back to user if we don't have chat_id.
 
 def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> str:
     if not timestamp: return get_text(0, 'task_value_not_set', lang='en')
@@ -185,7 +217,7 @@ def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> s
     except (ValueError, TypeError, OSError) as e: log.warning(f"Could not format invalid timestamp: {timestamp}. Error: {e}"); return "Invalid Date"
 
 def build_client_menu(user_id, context: CallbackContext):
-    client_info = db.find_client_by_user_id(user_id); lang = context.user_data.get(CTX_LANG, 'en') if context.user_data else 'en'
+    client_info = db.find_client_by_user_id(user_id); lang = context.user_data.get(CTX_LANG, 'en')
     if not client_info: return get_text(user_id, 'unknown_user', lang=lang), None, ParseMode.HTML
     code = client_info['invitation_code']; sub_end_ts = client_info['subscription_end']; now_ts = int(datetime.now(UTC_TZ).timestamp())
     is_expired = sub_end_ts < now_ts; end_date = format_dt(sub_end_ts, fmt='%Y-%m-%d') if sub_end_ts else 'N/A'; expiry_warning = " ⚠️ <b>Expired</b>" if is_expired else ""
@@ -209,7 +241,7 @@ def build_client_menu(user_id, context: CallbackContext):
     markup = InlineKeyboardMarkup(keyboard); return menu_text, markup, parse_mode
 
 def build_admin_menu(user_id, context: CallbackContext):
-    lang = context.user_data.get(CTX_LANG, 'en') if context.user_data else 'en'; title = f"<b>{get_text(user_id, 'admin_panel_title', lang=lang)}</b>"; parse_mode = ParseMode.HTML
+    lang = context.user_data.get(CTX_LANG, 'en'); title = f"<b>{get_text(user_id, 'admin_panel_title', lang=lang)}</b>"; parse_mode = ParseMode.HTML
     keyboard = [ [ InlineKeyboardButton(get_text(user_id, 'admin_button_add_userbot', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}add_bot_prompt"), InlineKeyboardButton(get_text(user_id, 'admin_button_remove_userbot', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}remove_bot_select?page=0") ], [InlineKeyboardButton(get_text(user_id, 'admin_button_list_userbots', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}list_bots?page=0")], [InlineKeyboardButton(get_text(user_id, 'admin_button_gen_invite', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}gen_invite_prompt")], [InlineKeyboardButton(get_text(user_id, 'admin_button_view_subs', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_subs?page=0")], [ InlineKeyboardButton(get_text(user_id, 'admin_button_extend_sub', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}extend_sub_prompt"), InlineKeyboardButton(get_text(user_id, 'admin_button_assign_bots_client', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}assign_bots_prompt") ], [InlineKeyboardButton(get_text(user_id, 'admin_button_view_logs', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_logs?page=0")], ]
     markup = InlineKeyboardMarkup(keyboard); return title, markup, parse_mode
 
@@ -485,7 +517,7 @@ async def client_folder_menu(update: Update, context: CallbackContext) -> int:
     await _show_menu_async(update, context, build_folder_menu); return ConversationHandler.END
 
 def build_folder_menu(user_id, context: CallbackContext):
-    lang = context.user_data.get(CTX_LANG, 'en') if context.user_data else 'en'
+    lang = context.user_data.get(CTX_LANG, 'en')
     folders = db.get_folders_by_user(user_id); text = get_text(user_id, 'folder_menu_title', lang=lang); keyboard = []
     keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_create', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}create_prompt")])
     if folders: keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_edit', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}select_edit?page=0")]); keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_delete', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}select_delete?page=0")])
@@ -1020,7 +1052,7 @@ async def admin_view_subscriptions(update: Update, context: CallbackContext) -> 
         text = get_text(user_id, 'admin_subs_none', lang=lang)
         markup = InlineKeyboardMarkup([[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")]])
         await _send_or_edit_message(update, context, text, reply_markup=markup)
-        return ConversationHandler.END # Corrected position
+        return ConversationHandler.END 
     total_items = len(subs); start_index = current_page * ITEMS_PER_PAGE; end_index = start_index + ITEMS_PER_PAGE; subs_page = subs[start_index:end_index]
     text = f"<b>{get_text(user_id, 'admin_subs_title', lang=lang)}</b> (Page {current_page + 1}/{math.ceil(total_items / ITEMS_PER_PAGE)})\n\n"
     for sub in subs_page:
@@ -1071,7 +1103,7 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> str
     if not is_admin(user_id):
         if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer(get_text(user_id, 'unauthorized', lang=lang), show_alert=True); context.bot_data[f'answered_{query_id}'] = True; return ConversationHandler.END
     data = query.data;
-    action = "" # Initialize action
+    action = "" 
     if data.startswith(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirm_"): action = "remove_bot_confirm"
     elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_"): action = "remove_bot_confirmed"
     else: action = data.split(CALLBACK_ADMIN_PREFIX)[1].split('?')[0]
@@ -1200,6 +1232,9 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
         try:
              if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True); context.bot_data[f'answered_{query_id}'] = True
         except Exception: pass
+        # Make sure error_handler is called from a non-async context if it itself is sync
+        # If error_handler is async, it should be context.dispatcher.run_async(error_handler, ...)
+        # However, error_handler is now sync, so this is fine.
         context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'error_generic', lang=lang))
         next_state = ConversationHandler.END
     return next_state
@@ -1227,7 +1262,7 @@ main_conversation = ConversationHandler(
         STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename)],
         STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_links)], # Used by both folder edit & join selected bot
+        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_links)], 
         STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'primary'))],
@@ -1238,10 +1273,10 @@ main_conversation = ConversationHandler(
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private),
-        CommandHandler('start', start_command, filters=Filters.chat_type.private), # Allow /start to break out
-        CommandHandler('admin', admin_command, filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)), # Allow /admin to break out
-        CallbackQueryHandler(main_callback_handler), # Route unhandled callbacks to main router if possible
-        MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, conversation_fallback), # Generic fallback for unexpected text
+        CommandHandler('start', start_command, filters=Filters.chat_type.private), 
+        CommandHandler('admin', admin_command, filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)), 
+        CallbackQueryHandler(main_callback_handler), 
+        MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, conversation_fallback), 
     ],
     allow_reentry=True,
     name="main_conversation",
