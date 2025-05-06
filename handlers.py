@@ -58,8 +58,6 @@ CTX_TASK_SETTINGS = "task_settings"; CTX_PAGE = "page"; CTX_MESSAGE_ID = "messag
 # --- Helper Functions ---
 
 def clear_conversation_data(context: CallbackContext):
-    """Clears volatile keys from user_data, preserving user_id and lang."""
-    # context.user_data is guaranteed to be a dict.
     user_id = context.user_data.get(CTX_USER_ID)
     lang = context.user_data.get(CTX_LANG)
     
@@ -72,7 +70,6 @@ def clear_conversation_data(context: CallbackContext):
     for key in keys_to_clear:
         context.user_data.pop(key, None)
     
-    # Restore essential keys if they were present
     if user_id is not None:
         context.user_data[CTX_USER_ID] = user_id
     if lang is not None:
@@ -80,170 +77,264 @@ def clear_conversation_data(context: CallbackContext):
         
     log.debug(f"Cleared volatile conversation user_data for user {user_id or 'N/A'}")
 
-# **MODIFIED HERE**
 def get_user_id_and_lang(update: Update, context: CallbackContext) -> tuple[int | None, str]:
-    # context.user_data is always a dict when persistence is enabled.
     user_id = context.user_data.get(CTX_USER_ID)
     lang = context.user_data.get(CTX_LANG)
 
-    # Step 1: Determine user_id and store it in context if found from update
     if user_id is None:
         if update and update.effective_user:
             user_id = update.effective_user.id
-            context.user_data[CTX_USER_ID] = user_id # Store it
+            context.user_data[CTX_USER_ID] = user_id 
     
-    # Step 2: Determine lang and store it in context if possible
-    if lang is None: # If lang not already in context
-        if user_id is not None: # If we have a user_id (from context or just obtained from update)
-            # db.get_user_language defaults to 'en' if user not found or no lang set
+    if lang is None: 
+        if user_id is not None: 
             lang = db.get_user_language(user_id)
-            context.user_data[CTX_LANG] = lang # Store this lang (from DB or default 'en')
+            context.user_data[CTX_LANG] = lang 
         else:
-            # No user_id, so lang defaults to 'en'.
             lang = 'en'
-            # We don't store this default 'en' in context.user_data[CTX_LANG] yet,
-            # as CTX_LANG in user_data is usually associated with a specific user_id.
-            # If user_id becomes known later and lang is still the default 'en',
-            # it can be stored then if needed.
     
-    # Ensure lang is never None at return, default to 'en' if it somehow is.
-    # This also handles the case where lang was 'en' because user_id was None.
     final_lang = lang if lang is not None else 'en'
 
-    # If user_id is now known, ensure context reflects the determined language.
-    # This is important if lang was defaulted to 'en' due to user_id being initially unknown.
     if user_id is not None and context.user_data.get(CTX_LANG) != final_lang:
         context.user_data[CTX_LANG] = final_lang
             
     return user_id, final_lang
 
-
+# **MODIFIED HERE - Enhanced Logging**
 async def _send_or_edit_message(update: Update, context: CallbackContext, text: str, **kwargs):
     user_id, lang = get_user_id_and_lang(update, context)
+    log.info(f"_send_or_edit_message: START - User: {user_id}, Lang: {lang}, Text: '{html.escape(text[:70])}...', Kwargs: {kwargs}")
+
     parse_mode = kwargs.get('parse_mode', ParseMode.HTML)
     kwargs['parse_mode'] = parse_mode
-    chat_id = update.effective_chat.id if update.effective_chat else user_id
-    message_id = None
-    query = update.callback_query
+
+    chat_id = None
+    if update and update.effective_chat:
+        chat_id = update.effective_chat.id
+    elif user_id: 
+        chat_id = user_id
+    
+    log.debug(f"_send_or_edit_message: Determined chat_id: {chat_id}")
+
+    if not chat_id:
+        log.error(f"_send_or_edit_message: CRITICAL - Cannot determine chat_id. User ID: {user_id}. Update provided: {update is not None}")
+        return
+
+    message_id_to_edit = None
+    query = update.callback_query if update else None
     query_id = query.id if query else None
     answered_callback = False
 
-    if query:
-        message_id = query.message.message_id
-        if not chat_id: chat_id = query.from_user.id
-    elif context.user_data and 'message_id' in context.user_data: # Make sure context.user_data exists
-        message_id = context.user_data.get(CTX_MESSAGE_ID)
-        if not chat_id: chat_id = user_id
-
-    if not chat_id: log.error(f"Cannot determine chat_id for sending/editing. User ID: {user_id}"); return
+    if query and query.message:
+        log.debug(f"_send_or_edit_message: Callback query detected. Original message_id: {query.message.message_id}")
+        message_id_to_edit = query.message.message_id
+    elif CTX_MESSAGE_ID in context.user_data: # Check after ensuring context.user_data is a dict
+        message_id_to_edit = context.user_data.get(CTX_MESSAGE_ID)
+        log.debug(f"_send_or_edit_message: Using message_id from context: {message_id_to_edit}")
+    
+    log.debug(f"_send_or_edit_message: Final message_id_to_edit (for editing attempts): {message_id_to_edit}")
 
     reply_markup = kwargs.get('reply_markup')
-    if reply_markup and not isinstance(reply_markup, InlineKeyboardMarkup): kwargs['reply_markup'] = None
+    if reply_markup and not isinstance(reply_markup, InlineKeyboardMarkup):
+        log.warning("_send_or_edit_message: reply_markup is not InlineKeyboardMarkup, removing.")
+        kwargs.pop('reply_markup', None) # Use pop to ensure it's removed from kwargs for the call
 
-    sent_message = None
+    sent_message_object = None
+
     try:
-        if query:
+        if query and query.message: 
+            log.info(f"_send_or_edit_message: Attempting to EDIT message {query.message.message_id} in chat {chat_id}")
             try:
                 if query_id and not context.bot_data.get(f'answered_{query_id}', False):
-                    await query.answer(); context.bot_data[f'answered_{query_id}'] = True
+                    await query.answer()
+                    context.bot_data[f'answered_{query_id}'] = True
+                    log.debug(f"_send_or_edit_message: Answered callback query {query_id}")
                 answered_callback = True
-            except (BadRequest, TelegramError) as cb_e: log.debug(f"Ignoring callback answer error: {cb_e}")
+            except (BadRequest, TelegramError) as cb_e:
+                log.debug(f"_send_or_edit_message: Ignoring callback answer error: {cb_e}")
+            
             await context.bot.edit_message_text(chat_id=chat_id, message_id=query.message.message_id, text=text, **kwargs)
-            if context.user_data: context.user_data[CTX_MESSAGE_ID] = query.message.message_id
-        elif update.message:
-            sent_message = await update.message.reply_text(text=text, **kwargs)
-            if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
-        elif message_id and chat_id: # Check if chat_id is valid
-             await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, **kwargs)
-        else: # Check if chat_id is valid
-            sent_message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
+            log.info(f"_send_or_edit_message: Successfully EDITED message {query.message.message_id}")
+            context.user_data[CTX_MESSAGE_ID] = query.message.message_id
+
+        elif update and update.message: 
+            log.info(f"_send_or_edit_message: Attempting to REPLY to incoming message {update.message.message_id} in chat {chat_id}")
+            sent_message_object = await update.message.reply_text(text=text, **kwargs)
+            log.info(f"_send_or_edit_message: Successfully REPLIED with new message {sent_message_object.message_id if sent_message_object else 'N/A'}")
+            if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
+        
+        elif message_id_to_edit and chat_id: 
+            log.info(f"_send_or_edit_message: Attempting to EDIT message {message_id_to_edit} (from context) in chat {chat_id}")
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id_to_edit, text=text, **kwargs)
+            log.info(f"_send_or_edit_message: Successfully EDITED message {message_id_to_edit} (from context)")
+            # CTX_MESSAGE_ID is already message_id_to_edit
+
+        else: 
+            log.info(f"_send_or_edit_message: Attempting to SEND NEW message to chat {chat_id}")
+            sent_message_object = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            log.info(f"_send_or_edit_message: Successfully SENT NEW message {sent_message_object.message_id if sent_message_object else 'N/A'}")
+            if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
+
     except BadRequest as e:
+        log.error(f"_send_or_edit_message: BadRequest for user {user_id}, chat {chat_id}: {e}", exc_info=True)
         if "message is not modified" in str(e).lower():
-            log.debug(f"Ignoring 'message is not modified' error for user {user_id}.")
+            log.debug(f"_send_or_edit_message: Ignoring 'message is not modified' error.")
             if query_id and not answered_callback and not context.bot_data.get(f'answered_{query_id}', False):
                 try: await query.answer(); context.bot_data[f'answered_{query_id}'] = True
                 except Exception: pass
         elif "message to edit not found" in str(e).lower() or "chat not found" in str(e).lower():
-            log.warning(f"Failed to edit (maybe deleted: {message_id}): {e}. Sending new.")
+            log.warning(f"_send_or_edit_message: Failed to edit (target message/chat not found): {e}. Attempting to send new.")
             try:
-                if chat_id: # Ensure chat_id is valid before sending
-                    sent_message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-                    if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
-            except Exception as send_e: log.error(f"Failed to send fallback message: {send_e}")
-            if context.user_data: context.user_data.pop(CTX_MESSAGE_ID, None)
+                if chat_id:
+                    sent_message_object = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+                    log.info(f"_send_or_edit_message: Fallback (edit failed) SENT NEW message {sent_message_object.message_id if sent_message_object else 'N/A'}")
+                    if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
+            except Exception as send_e: log.error(f"_send_or_edit_message: Fallback (edit failed) SEND NEW also failed: {send_e}", exc_info=True)
+            context.user_data.pop(CTX_MESSAGE_ID, None)
         elif "reply message not found" in str(e).lower():
-             log.warning(f"Failed reply (original deleted?): {e}. Sending standalone.")
+             log.warning(f"_send_or_edit_message: Failed reply (original message for reply not found): {e}. Attempting to send standalone.")
              try:
-                 if chat_id: # Ensure chat_id is valid
-                     sent_message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-                     if context.user_data: context.user_data[CTX_MESSAGE_ID] = sent_message.message_id
-             except Exception as send_e: log.error(f"Failed to send fallback standalone: {send_e}")
-        else:
-            log.error(f"BadRequest sending/editing for user {user_id}: {e}", exc_info=True)
+                 if chat_id:
+                     sent_message_object = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+                     log.info(f"_send_or_edit_message: Fallback (reply failed) SENT NEW (standalone) message {sent_message_object.message_id if sent_message_object else 'N/A'}")
+                     if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
+             except Exception as send_e: log.error(f"_send_or_edit_message: Fallback (reply failed) SEND NEW (standalone) also failed: {send_e}", exc_info=True)
+        else: 
+            log.error(f"_send_or_edit_message: Unhandled BadRequest: {e}. Sending generic error.")
             if chat_id:
                 try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
-                except Exception as send_e: log.error(f"Failed to send fallback error msg: {send_e}")
+                except Exception as send_e: log.error(f"_send_or_edit_message: Failed to send generic error after BadRequest: {send_e}", exc_info=True)
     except TelegramError as e:
-         log.error(f"TelegramError sending/editing for user {user_id}: {e}", exc_info=True)
-         if isinstance(e, RetryAfter): log.warning(f"Flood control: Wait {e.retry_after}s.")
+         log.error(f"_send_or_edit_message: TelegramError for user {user_id}, chat {chat_id}: {e}", exc_info=True)
+         if isinstance(e, RetryAfter): log.warning(f"_send_or_edit_message: Flood control - Wait {e.retry_after}s.")
          if chat_id:
              try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
-             except Exception as send_e: log.error(f"Failed to send fallback error msg after TelegramError: {send_e}")
+             except Exception as send_e: log.error(f"_send_or_edit_message: Failed to send generic error after TelegramError: {send_e}", exc_info=True)
     except Exception as e:
-        log.error(f"Unexpected error in _send_or_edit_message for user {user_id}: {e}", exc_info=True)
+        log.error(f"_send_or_edit_message: UNEXPECTED Exception for user {user_id}, chat {chat_id}: {e}", exc_info=True)
         if chat_id:
             try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
-            except Exception as send_e: log.error(f"Failed to send fallback error msg after unexpected error: {send_e}")
+            except Exception as send_e: log.error(f"_send_or_edit_message: Failed to send generic error after UNEXPECTED Exception: {send_e}", exc_info=True)
+    log.info(f"_send_or_edit_message: END - User: {user_id}")
+
 
 async def _show_menu_async(update: Update, context: CallbackContext, menu_builder_func):
     user_id, lang = get_user_id_and_lang(update, context)
+    log.info(f"_show_menu_async: Building menu with {menu_builder_func.__name__} for user {user_id}, lang {lang}")
     message, markup, parse_mode = menu_builder_func(user_id, context)
+    if not message:
+        log.error(f"_show_menu_async: Menu builder {menu_builder_func.__name__} returned empty message for user {user_id}. Aborting send.")
+        return
+    log.info(f"_show_menu_async: Menu built. Message: '{html.escape(message[:70])}...'. Markup: {markup is not None}. ParseMode: {parse_mode}")
     await _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode)
+    log.info(f"_show_menu_async: Finished attempt to send/edit menu for user {user_id}")
 
 def error_handler(update: object, context: CallbackContext) -> None:
-    """Log Errors caused by Updates and send a user-friendly message."""
     log.error(f"Exception while handling an update:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_chat:
         user_id, lang = get_user_id_and_lang(update, context) 
         error_message = get_text(user_id, 'error_generic', lang=lang) 
+        log.info(f"error_handler: Attempting to send generic error to user {user_id}, chat {update.effective_chat.id}")
         context.dispatcher.run_async(_send_or_edit_message, update, context, error_message)
     elif isinstance(update, str): 
         log.error(f"Error handler received string update: {update}")
+    else:
+        log.error(f"Error handler received non-Update object: {type(update)}")
+
 
 def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> str:
-    if not timestamp: return get_text(0, 'task_value_not_set', lang='en')
-    try: dt_utc = datetime.fromtimestamp(timestamp, UTC_TZ); dt_local = dt_utc.astimezone(tz); return dt_local.strftime(fmt)
-    except (ValueError, TypeError, OSError) as e: log.warning(f"Could not format invalid timestamp: {timestamp}. Error: {e}"); return "Invalid Date"
+    if not timestamp: return get_text(0, 'task_value_not_set', lang='en') # Use a default lang if user_id is 0
+    try: 
+        dt_utc = datetime.fromtimestamp(timestamp, UTC_TZ)
+        dt_local = dt_utc.astimezone(tz)
+        return dt_local.strftime(fmt)
+    except (ValueError, TypeError, OSError) as e: 
+        log.warning(f"Could not format invalid timestamp: {timestamp}. Error: {e}")
+        return "Invalid Date"
 
 def build_client_menu(user_id, context: CallbackContext):
-    client_info = db.find_client_by_user_id(user_id); lang = context.user_data.get(CTX_LANG, 'en')
-    if not client_info: return get_text(user_id, 'unknown_user', lang=lang), None, ParseMode.HTML
-    code = client_info['invitation_code']; sub_end_ts = client_info['subscription_end']; now_ts = int(datetime.now(UTC_TZ).timestamp())
-    is_expired = sub_end_ts < now_ts; end_date = format_dt(sub_end_ts, fmt='%Y-%m-%d') if sub_end_ts else 'N/A'; expiry_warning = " ⚠️ <b>Expired</b>" if is_expired else ""
-    userbot_phones = db.get_client_bots(user_id); bot_count = len(userbot_phones); parse_mode = ParseMode.HTML
+    # Ensure lang is fetched correctly using context.user_data if available
+    lang = context.user_data.get(CTX_LANG) if context.user_data else 'en'
+    if user_id and not lang: # If user_id known but lang not in context, try DB
+        lang = db.get_user_language(user_id)
+    lang = lang or 'en' # Default to 'en' if still None
+
+    client_info = db.find_client_by_user_id(user_id)
+    if not client_info: 
+        # Pass the determined lang to get_text
+        return get_text(user_id, 'unknown_user', lang=lang), None, ParseMode.HTML
+    
+    code = client_info['invitation_code']
+    sub_end_ts = client_info['subscription_end']
+    now_ts = int(datetime.now(UTC_TZ).timestamp())
+    is_expired = sub_end_ts < now_ts
+    end_date = format_dt(sub_end_ts, fmt='%Y-%m-%d') if sub_end_ts else 'N/A'
+    expiry_warning = " ⚠️ <b>Expired</b>" if is_expired else ""
+    
+    userbot_phones = db.get_client_bots(user_id)
+    bot_count = len(userbot_phones)
+    parse_mode = ParseMode.HTML
+
     menu_text = f"<b>{get_text(user_id, 'client_menu_title', lang=lang, code=html.escape(code))}</b>{expiry_warning}\n"
-    menu_text += get_text(user_id, 'client_menu_sub_end', lang=lang, end_date=end_date) + "\n\n" + f"<u>{get_text(user_id, 'client_menu_userbots_title', lang=lang, count=bot_count)}</u>\n"
+    menu_text += get_text(user_id, 'client_menu_sub_end', lang=lang, end_date=end_date) + "\n\n"
+    menu_text += f"<u>{get_text(user_id, 'client_menu_userbots_title', lang=lang, count=bot_count)}</u>\n"
+
     if userbot_phones:
         for i, phone in enumerate(userbot_phones, 1):
-            bot_db_info = db.find_userbot(phone); username = bot_db_info['username'] if bot_db_info else None; status = bot_db_info['status'].capitalize() if bot_db_info else 'Unknown'
-            last_error = bot_db_info['last_error'] if bot_db_info else None; display_name = html.escape(f"@{username}" if username else phone)
-            status_icon = "⚪️";
+            bot_db_info = db.find_userbot(phone)
+            username = bot_db_info['username'] if bot_db_info else None
+            status = bot_db_info['status'].capitalize() if bot_db_info else 'Unknown'
+            last_error = bot_db_info['last_error'] if bot_db_info else None
+            display_name = html.escape(f"@{username}" if username else phone)
+            
+            status_icon = "⚪️" # Default
             if bot_db_info:
                 if bot_db_info['status'] == 'active': status_icon = "🟢"
                 elif bot_db_info['status'] == 'error': status_icon = "🔴"
                 elif bot_db_info['status'] in ['connecting', 'authenticating', 'initializing']: status_icon = "⏳"
                 elif bot_db_info['status'] in ['needs_code', 'needs_password']: status_icon = "⚠️"
+            
             menu_text += get_text(user_id, 'client_menu_userbot_line', lang=lang, index=i, status_icon=status_icon, display_name=display_name, status=html.escape(status)) + "\n"
-            if last_error: escaped_error = html.escape(last_error); error_line = get_text(user_id, 'client_menu_userbot_error', lang=lang, error=f"{escaped_error[:100]}{'...' if len(escaped_error)>100 else ''}"); menu_text += f"  {error_line}\n"
-    else: menu_text += get_text(user_id, 'client_menu_no_userbots', lang=lang) + "\n"
-    keyboard = [ [InlineKeyboardButton(get_text(user_id, 'client_menu_button_setup_tasks', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}select_bot_task")], [InlineKeyboardButton(get_text(user_id, 'client_menu_button_manage_folders', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}manage_folders")], [ InlineKeyboardButton(get_text(user_id, 'client_menu_button_join_groups', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}select_bot_join"), ], [InlineKeyboardButton(get_text(user_id, 'client_menu_button_stats', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}view_stats")], [ InlineKeyboardButton(get_text(user_id, 'client_menu_button_language', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}language") ], ]
-    markup = InlineKeyboardMarkup(keyboard); return menu_text, markup, parse_mode
+            if last_error: 
+                escaped_error = html.escape(last_error)
+                error_line = get_text(user_id, 'client_menu_userbot_error', lang=lang, error=f"{escaped_error[:100]}{'...' if len(escaped_error)>100 else ''}")
+                menu_text += f"  {error_line}\n"
+    else:
+        menu_text += get_text(user_id, 'client_menu_no_userbots', lang=lang) + "\n"
+
+    keyboard = [
+        [InlineKeyboardButton(get_text(user_id, 'client_menu_button_setup_tasks', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}select_bot_task")],
+        [InlineKeyboardButton(get_text(user_id, 'client_menu_button_manage_folders', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}manage_folders")],
+        [InlineKeyboardButton(get_text(user_id, 'client_menu_button_join_groups', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}select_bot_join")],
+        [InlineKeyboardButton(get_text(user_id, 'client_menu_button_stats', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}view_stats")],
+        [InlineKeyboardButton(get_text(user_id, 'client_menu_button_language', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}language")],
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    return menu_text, markup, parse_mode
 
 def build_admin_menu(user_id, context: CallbackContext):
-    lang = context.user_data.get(CTX_LANG, 'en'); title = f"<b>{get_text(user_id, 'admin_panel_title', lang=lang)}</b>"; parse_mode = ParseMode.HTML
-    keyboard = [ [ InlineKeyboardButton(get_text(user_id, 'admin_button_add_userbot', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}add_bot_prompt"), InlineKeyboardButton(get_text(user_id, 'admin_button_remove_userbot', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}remove_bot_select?page=0") ], [InlineKeyboardButton(get_text(user_id, 'admin_button_list_userbots', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}list_bots?page=0")], [InlineKeyboardButton(get_text(user_id, 'admin_button_gen_invite', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}gen_invite_prompt")], [InlineKeyboardButton(get_text(user_id, 'admin_button_view_subs', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_subs?page=0")], [ InlineKeyboardButton(get_text(user_id, 'admin_button_extend_sub', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}extend_sub_prompt"), InlineKeyboardButton(get_text(user_id, 'admin_button_assign_bots_client', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}assign_bots_prompt") ], [InlineKeyboardButton(get_text(user_id, 'admin_button_view_logs', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_logs?page=0")], ]
-    markup = InlineKeyboardMarkup(keyboard); return title, markup, parse_mode
+    lang = context.user_data.get(CTX_LANG) if context.user_data else 'en'
+    if user_id and not lang: lang = db.get_user_language(user_id) # Ensure lang is fetched
+    lang = lang or 'en'
+
+    title = f"<b>{get_text(user_id, 'admin_panel_title', lang=lang)}</b>"
+    parse_mode = ParseMode.HTML
+    keyboard = [
+        [
+            InlineKeyboardButton(get_text(user_id, 'admin_button_add_userbot', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}add_bot_prompt"),
+            InlineKeyboardButton(get_text(user_id, 'admin_button_remove_userbot', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}remove_bot_select?page=0")
+        ],
+        [InlineKeyboardButton(get_text(user_id, 'admin_button_list_userbots', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}list_bots?page=0")],
+        [InlineKeyboardButton(get_text(user_id, 'admin_button_gen_invite', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}gen_invite_prompt")],
+        [InlineKeyboardButton(get_text(user_id, 'admin_button_view_subs', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_subs?page=0")],
+        [
+            InlineKeyboardButton(get_text(user_id, 'admin_button_extend_sub', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}extend_sub_prompt"),
+            InlineKeyboardButton(get_text(user_id, 'admin_button_assign_bots_client', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}assign_bots_prompt")
+        ],
+        [InlineKeyboardButton(get_text(user_id, 'admin_button_view_logs', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_logs?page=0")],
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    return title, markup, parse_mode
 
 def build_pagination_buttons(base_callback_data: str, current_page: int, total_items: int, items_per_page: int, lang: str = 'en') -> list:
     buttons = [];
@@ -256,8 +347,10 @@ def build_pagination_buttons(base_callback_data: str, current_page: int, total_i
     return buttons
 
 def start_command(update: Update, context: CallbackContext) -> str | int:
-    user_id, lang = get_user_id_and_lang(update, context); clear_conversation_data(context)
-    log.info(f"Start cmd: UserID={user_id}, User={update.effective_user.username}")
+    user_id, lang = get_user_id_and_lang(update, context)
+    clear_conversation_data(context)
+    log.info(f"Start cmd: UserID={user_id}, User={update.effective_user.username if update.effective_user else 'N/A'}, Lang={lang}")
+    
     if is_admin(user_id):
         log.info(f"Admin user {user_id} used /start, showing admin menu.")
         context.dispatcher.run_async(_show_menu_async, update, context, build_admin_menu)
@@ -267,86 +360,163 @@ def start_command(update: Update, context: CallbackContext) -> str | int:
         if client_info:
             now_ts = int(datetime.now(UTC_TZ).timestamp())
             if client_info['subscription_end'] < now_ts:
+                log.info(f"Client {user_id} subscription expired. Sending expiry message.")
                 context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'subscription_expired', lang=lang))
                 return ConversationHandler.END
             else:
+                log.info(f"Client {user_id} identified. Showing client menu.")
                 context.dispatcher.run_async(_show_menu_async, update, context, build_client_menu)
                 return ConversationHandler.END
         else:
+            log.info(f"Unknown user {user_id}. Sending welcome/code prompt.")
             context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'welcome', lang=lang))
             return STATE_WAITING_FOR_CODE
 
 async def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
     user_id, lang = get_user_id_and_lang(update, context); code = update.message.text.strip().lower()
     log.info(f"UserID={user_id} submitted code: {code}")
-    if not re.fullmatch(r'[a-f0-9]{8}', code): await _send_or_edit_message(update, context, get_text(user_id, 'invalid_code_format', lang=lang)); return STATE_WAITING_FOR_CODE
-    success, status_key = db.activate_client(code, user_id); text_to_send = get_text(user_id, status_key, lang=lang, code=code)
+    if not re.fullmatch(r'[a-f0-9]{8}', code): 
+        await _send_or_edit_message(update, context, get_text(user_id, 'invalid_code_format', lang=lang))
+        return STATE_WAITING_FOR_CODE
+    
+    success, status_key = db.activate_client(code, user_id)
+    text_to_send = get_text(user_id, status_key, lang=lang, code=code)
+    
     if success:
-        log.info(f"Activated client {user_id} code {code}"); db.log_event_db("Client Activated", f"Code: {code}", user_id=user_id)
-        context.user_data[CTX_LANG] = db.get_user_language(user_id); await _send_or_edit_message(update, context, text_to_send)
-        await _show_menu_async(update, context, build_client_menu); return ConversationHandler.END
+        log.info(f"Activated client {user_id} code {code}"); 
+        db.log_event_db("Client Activated", f"Code: {code}", user_id=user_id)
+        # Re-fetch lang after activation as it might have been set in DB
+        new_lang = db.get_user_language(user_id)
+        context.user_data[CTX_LANG] = new_lang
+        await _send_or_edit_message(update, context, text_to_send) # Send activation result
+        await _show_menu_async(update, context, build_client_menu) # Then show menu
+        return ConversationHandler.END
     else:
-        log.warning(f"Failed activation user {user_id} code {code}: {status_key}"); await _send_or_edit_message(update, context, text_to_send)
-        clear_conversation_data(context); return ConversationHandler.END
+        log.warning(f"Failed activation user {user_id} code {code}: {status_key}")
+        await _send_or_edit_message(update, context, text_to_send)
+        clear_conversation_data(context)
+        return ConversationHandler.END # Or specific state if retrying code is desired
 
 def admin_command(update: Update, context: CallbackContext) -> str | int:
-    user_id, lang = get_user_id_and_lang(update, context); clear_conversation_data(context)
-    log.info(f"Admin cmd: UserID={user_id}, User={update.effective_user.username}")
-    if not is_admin(user_id): context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'unauthorized', lang=lang)); return ConversationHandler.END
-    context.dispatcher.run_async(_show_menu_async, update, context, build_admin_menu); return ConversationHandler.END
+    user_id, lang = get_user_id_and_lang(update, context)
+    clear_conversation_data(context)
+    log.info(f"Admin cmd: UserID={user_id}, User={update.effective_user.username if update.effective_user else 'N/A'}, Lang={lang}")
+    
+    if not is_admin(user_id): 
+        log.warning(f"Unauthorized attempt to use /admin by UserID={user_id}")
+        context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    log.info(f"Admin user {user_id} showing admin menu.")
+    context.dispatcher.run_async(_show_menu_async, update, context, build_admin_menu)
+    return ConversationHandler.END
 
 def cancel_command(update: Update, context: CallbackContext) -> int:
-    user_id, lang = get_user_id_and_lang(update, context); log.info(f"Cancel cmd: UserID={user_id}")
-    current_state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') if context.user_data else 'None'
-    log.debug(f"Cancel called from state: {current_state}"); clear_conversation_data(context)
+    user_id, lang = get_user_id_and_lang(update, context)
+    log.info(f"Cancel cmd: UserID={user_id}, Lang={lang}")
+    current_state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') # Check type
+    log.debug(f"Cancel called from state: {current_state}")
+    
+    clear_conversation_data(context)
     context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'cancelled', lang=lang))
-    if is_admin(user_id): context.dispatcher.run_async(_show_menu_async, update, context, build_admin_menu)
-    elif db.find_client_by_user_id(user_id): context.dispatcher.run_async(_show_menu_async, update, context, build_client_menu)
+    
+    if is_admin(user_id):
+        log.debug(f"Cancel cmd: User {user_id} is admin, showing admin menu.")
+        context.dispatcher.run_async(_show_menu_async, update, context, build_admin_menu)
+    elif db.find_client_by_user_id(user_id):
+        log.debug(f"Cancel cmd: User {user_id} is client, showing client menu.")
+        context.dispatcher.run_async(_show_menu_async, update, context, build_client_menu)
+    else:
+        log.debug(f"Cancel cmd: User {user_id} is neither admin nor known client.")
+        # Optionally send a generic "start again" message if not handled by menu display
     return ConversationHandler.END
 
 def conversation_fallback(update: Update, context: CallbackContext) -> int:
      user_id, lang = get_user_id_and_lang(update, context)
-     state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') if context.user_data else 'None'
-     msg_text = update.effective_message.text if update.effective_message else 'Non-text update'
-     log.warning(f"Conv fallback: UserID={user_id}. State={state}. Msg='{msg_text[:50]}...'")
+     state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data')
+     msg_text = update.effective_message.text if update.effective_message and update.effective_message.text else 'Non-text update'
+     log.warning(f"Conv fallback: UserID={user_id}. State={state}. Msg='{html.escape(msg_text[:50])}...', Lang={lang}")
+     
      if update.message and update.message.text and update.message.text.startswith('/'):
          command = update.message.text
          if command == '/cancel': return cancel_command(update, context)
-         if command == '/start': context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'state_cleared', lang=lang)); return start_command(update, context)
-         if command == '/admin' and is_admin(user_id): context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'state_cleared', lang=lang)); return admin_command(update, context)
+         if command == '/start': 
+             context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'state_cleared', lang=lang))
+             return start_command(update, context)
+         if command == '/admin' and is_admin(user_id): 
+             context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'state_cleared', lang=lang))
+             return admin_command(update, context)
+             
      context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'conversation_fallback', lang=lang))
-     clear_conversation_data(context); return ConversationHandler.END
+     clear_conversation_data(context)
+     return ConversationHandler.END
 
 async def client_menu(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
-    if update.callback_query: clear_conversation_data(context); lang = context.user_data.get(CTX_LANG, 'en')
-    await _show_menu_async(update, context, build_client_menu); return ConversationHandler.END
+    if update.callback_query: 
+        clear_conversation_data(context)
+        # Re-fetch lang as clear_conversation_data might have affected context.user_data
+        _, lang = get_user_id_and_lang(update, context) 
+    log.info(f"client_menu: Displaying for user {user_id}, lang {lang}")
+    await _show_menu_async(update, context, build_client_menu)
+    return ConversationHandler.END
 
 async def client_ask_select_language(update: Update, context: CallbackContext) -> int:
-    user_id, lang = get_user_id_and_lang(update, context); buttons = []; row = []; sorted_languages = sorted(language_names.items(), key=lambda item: item[1])
-    for code, name in sorted_languages: row.append(InlineKeyboardButton(name, callback_data=f"{CALLBACK_LANG_PREFIX}{code}"));
-    if len(row) >= 2: buttons.append(row); row = []
-    if row: buttons.append(row)
-    buttons.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")]); markup = InlineKeyboardMarkup(buttons)
-    await _send_or_edit_message(update, context, get_text(user_id, 'select_language', lang=lang), reply_markup=markup); return ConversationHandler.END
+    user_id, lang = get_user_id_and_lang(update, context)
+    log.info(f"client_ask_select_language: User {user_id}, current lang {lang}")
+    buttons = []
+    row = []
+    sorted_languages = sorted(language_names.items(), key=lambda item: item[1])
+    for code, name in sorted_languages: 
+        row.append(InlineKeyboardButton(name, callback_data=f"{CALLBACK_LANG_PREFIX}{code}"))
+        if len(row) >= 2: # Max 2 buttons per row for better layout
+            buttons.append(row)
+            row = []
+    if row: 
+        buttons.append(row)
+    
+    buttons.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")])
+    markup = InlineKeyboardMarkup(buttons)
+    await _send_or_edit_message(update, context, get_text(user_id, 'select_language', lang=lang), reply_markup=markup)
+    return ConversationHandler.END # This is not a state, but a one-off action ending the conv for this interaction path
 
 async def set_language_handler(update: Update, context: CallbackContext) -> int:
-    query = update.callback_query; user_id = query.from_user.id; lang_code = query.data.split(CALLBACK_LANG_PREFIX)[1]; current_lang = context.user_data.get(CTX_LANG, 'en')
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang_code = query.data.split(CALLBACK_LANG_PREFIX)[1]
+    # Fetch current lang from context or default for answering callback
+    current_lang_for_cb_answer = context.user_data.get(CTX_LANG, 'en') 
+    log.info(f"set_language_handler: User {user_id} trying to set lang to {lang_code}. Current context lang for CB: {current_lang_for_cb_answer}")
+
     async def answer_callback_task(text=None, show_alert=False):
         try:
-             query_id = query.id
-             if not context.bot_data.get(f'answered_{query_id}', False): await query.answer(text, show_alert=show_alert); context.bot_data[f'answered_{query_id}'] = True
-        except Exception as e: log.debug(f"Failed to answer language CB: {e}")
-    if lang_code not in language_names: await answer_callback_task(get_text(user_id, 'error_invalid_input', lang=current_lang), show_alert=True); return ConversationHandler.END
+             query_id_local = query.id
+             if not context.bot_data.get(f'answered_{query_id_local}', False):
+                 await query.answer(text, show_alert=show_alert)
+                 context.bot_data[f'answered_{query_id_local}'] = True
+                 log.debug(f"set_language_handler: Answered CB {query_id_local} with text: {text}")
+        except Exception as e:
+            log.debug(f"set_language_handler: Failed to answer language CB {query.id}: {e}")
+
+    if lang_code not in language_names:
+        log.warning(f"set_language_handler: User {user_id} selected invalid lang_code {lang_code}")
+        await answer_callback_task(get_text(user_id, 'error_invalid_input', lang=current_lang_for_cb_answer), show_alert=True)
+        return ConversationHandler.END
+
     if db.set_user_language(user_id, lang_code):
-         context.user_data[CTX_LANG] = lang_code; lang = lang_code
-         success_text = get_text(user_id, 'language_set', lang=lang, lang_name=language_names[lang_code])
-         keyboard = [[ InlineKeyboardButton(get_text(user_id, 'button_main_menu', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")]]
+         context.user_data[CTX_LANG] = lang_code # Update context lang immediately
+         log.info(f"set_language_handler: User {user_id} language set to {lang_code} in DB and context.")
+         
+         success_text = get_text(user_id, 'language_set', lang=lang_code, lang_name=language_names[lang_code])
+         keyboard = [[ InlineKeyboardButton(get_text(user_id, 'button_main_menu', lang=lang_code), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")]]
          markup = InlineKeyboardMarkup(keyboard)
          await _send_or_edit_message(update, context, success_text, reply_markup=markup)
-         await answer_callback_task()
-    else: await answer_callback_task(get_text(user_id, 'language_set_error', lang=current_lang), show_alert=True)
-    return ConversationHandler.END
+         await answer_callback_task() # Answer with no text if success message sent
+    else:
+        log.error(f"set_language_handler: Failed to set language in DB for user {user_id} to {lang_code}")
+        await answer_callback_task(get_text(user_id, 'language_set_error', lang=current_lang_for_cb_answer), show_alert=True)
+    
+    return ConversationHandler.END # This interaction path ends here.
 
 async def process_admin_phone(update: Update, context: CallbackContext) -> str | int:
      user_id, lang = get_user_id_and_lang(update, context); phone_raw = update.message.text.strip()
@@ -513,16 +683,29 @@ async def process_admin_add_bots_count(update: Update, context: CallbackContext)
 
 async def client_folder_menu(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
-    if update.callback_query: clear_conversation_data(context); lang = context.user_data.get(CTX_LANG, 'en')
-    await _show_menu_async(update, context, build_folder_menu); return ConversationHandler.END
+    if update.callback_query: 
+        clear_conversation_data(context)
+        _, lang = get_user_id_and_lang(update, context) # Re-fetch lang
+    log.info(f"client_folder_menu: User {user_id}, Lang {lang}")
+    await _show_menu_async(update, context, build_folder_menu)
+    return ConversationHandler.END
 
 def build_folder_menu(user_id, context: CallbackContext):
-    lang = context.user_data.get(CTX_LANG, 'en')
-    folders = db.get_folders_by_user(user_id); text = get_text(user_id, 'folder_menu_title', lang=lang); keyboard = []
+    lang = context.user_data.get(CTX_LANG) if context.user_data else 'en'
+    if user_id and not lang: lang = db.get_user_language(user_id)
+    lang = lang or 'en'
+
+    folders = db.get_folders_by_user(user_id)
+    text = get_text(user_id, 'folder_menu_title', lang=lang)
+    keyboard = []
     keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_create', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}create_prompt")])
-    if folders: keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_edit', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}select_edit?page=0")]); keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_delete', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}select_delete?page=0")])
-    else: text += "\n" + get_text(user_id, 'folder_no_folders', lang=lang)
-    keyboard.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")]); markup = InlineKeyboardMarkup(keyboard);
+    if folders: 
+        keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_edit', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}select_edit?page=0")])
+        keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_delete', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}select_delete?page=0")])
+    else: 
+        text += "\n" + get_text(user_id, 'folder_no_folders', lang=lang)
+    keyboard.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")])
+    markup = InlineKeyboardMarkup(keyboard)
     return text, markup, ParseMode.HTML
 
 async def process_folder_name(update: Update, context: CallbackContext) -> int:
@@ -1004,14 +1187,14 @@ async def admin_confirm_remove_userbot(update: Update, context: CallbackContext)
          if query_id and not context.bot_data.get(f'answered_{query_id}', False):
              await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
              context.bot_data[f'answered_{query_id}'] = True
-         return admin_command(update, context) # Return sync command
+         return admin_command(update, context) 
 
      bot_info = db.find_userbot(phone_to_remove)
      if not bot_info:
          if query_id and not context.bot_data.get(f'answered_{query_id}', False):
              await query.answer(get_text(user_id, 'admin_userbot_not_found', lang=lang), show_alert=True)
              context.bot_data[f'answered_{query_id}'] = True
-         return admin_command(update, context) # Return sync command
+         return admin_command(update, context) 
      username = bot_info['username']; display_name = html.escape(f"@{username}" if username else phone_to_remove)
      text = get_text(user_id, 'admin_userbot_remove_confirm_text', lang=lang, display_name=display_name)
      keyboard = [[ InlineKeyboardButton(get_text(user_id, 'button_yes', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_{phone_to_remove}"), InlineKeyboardButton(get_text(user_id, 'button_no', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu") ]]; markup = InlineKeyboardMarkup(keyboard)
@@ -1027,7 +1210,7 @@ async def admin_remove_userbot_confirmed(update: Update, context: CallbackContex
         if query_id and not context.bot_data.get(f'answered_{query_id}', False):
             await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
             context.bot_data[f'answered_{query_id}'] = True
-        return admin_command(update, context) # Return sync command
+        return admin_command(update, context) 
     bot_info = db.find_userbot(phone_to_remove); display_name = "N/A";
     if bot_info: display_name = html.escape(f"@{bot_info['username']}" if bot_info['username'] else phone_to_remove)
     log.info(f"Admin {user_id} confirmed removal of userbot {phone_to_remove}")
@@ -1037,7 +1220,7 @@ async def admin_remove_userbot_confirmed(update: Update, context: CallbackContex
         telethon_api.delete_session_files_for_phone(phone_to_remove)
         db.log_event_db("Userbot Removed", f"Phone: {phone_to_remove}", user_id=user_id, userbot_phone=phone_to_remove); await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_remove_success', lang=lang, display_name=display_name))
     else: await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_remove_error', lang=lang))
-    return admin_command(update, context) # Return sync command
+    return admin_command(update, context) 
 
 async def admin_view_subscriptions(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
@@ -1083,6 +1266,7 @@ async def admin_view_system_logs(update: Update, context: CallbackContext) -> in
 async def handle_client_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; client_info = db.find_client_by_user_id(user_id)
     query_id = query.id if query else None
+    log.info(f"handle_client_callback: User {user_id}, Data {data}, Lang {lang}")
     if not client_info or client_info['subscription_end'] < int(datetime.now(UTC_TZ).timestamp()):
         log.warning(f"Expired/Invalid client {user_id} tried action: {data}")
         if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer(get_text(user_id, 'subscription_expired', lang=lang), show_alert=True); context.bot_data[f'answered_{query_id}'] = True
@@ -1100,6 +1284,7 @@ async def handle_client_callback(update: Update, context: CallbackContext) -> st
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); query_id = query.id if query else None
+    log.info(f"handle_admin_callback: User {user_id}, Data {query.data if query else 'N/A'}, Lang {lang}")
     if not is_admin(user_id):
         if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer(get_text(user_id, 'unauthorized', lang=lang), show_alert=True); context.bot_data[f'answered_{query_id}'] = True; return ConversationHandler.END
     data = query.data;
@@ -1125,7 +1310,7 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> str
 
 async def handle_folder_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; action = data.split(CALLBACK_FOLDER_PREFIX)[1].split('?')[0]; query_id = query.id
-    log.debug(f"Folder Callback Route: Action='{action}', Data='{data}'")
+    log.info(f"handle_folder_callback: User {user_id}, Data {data}, Action {action}, Lang {lang}")
     if action == "create_prompt": await _send_or_edit_message(update, context, get_text(user_id, 'folder_create_prompt', lang=lang)); return STATE_WAITING_FOR_FOLDER_NAME
     elif action == "select_edit": return await client_select_folder_to_edit_or_delete(update, context, 'edit')
     elif action == "select_delete": return await client_select_folder_to_edit_or_delete(update, context, 'delete')
@@ -1145,7 +1330,7 @@ async def handle_folder_callback(update: Update, context: CallbackContext) -> st
 
 async def handle_task_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; action = data.split(CALLBACK_TASK_PREFIX)[1].split('?')[0]; query_id = query.id
-    log.debug(f"Task Callback Route: Action='{action}', Data='{data}'")
+    log.info(f"handle_task_callback: User {user_id}, Data {data}, Action {action}, Lang {lang}")
     if action.startswith("select_"): return await handle_userbot_selection(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP)
     elif action == "back_to_bot_select": clear_conversation_data(context); return await client_select_bot_generic(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP, 'task_select_userbot')
     elif action == "back_to_task_menu": return await task_show_settings_menu(update, context)
@@ -1164,28 +1349,32 @@ async def handle_task_callback(update: Update, context: CallbackContext) -> str 
     return None
 
 async def handle_join_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; log.debug(f"Join Callback Route: Data='{data}'"); query_id = query.id
+    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; query_id = query.id
+    log.info(f"handle_join_callback: User {user_id}, Data {data}, Lang {lang}")
     if data.startswith(CALLBACK_JOIN_PREFIX + "select_"): return await handle_userbot_selection(update, context, CALLBACK_JOIN_PREFIX, STATE_WAITING_FOR_GROUP_LINKS)
     else: log.warning(f"Unhandled JOIN CB: Data='{data}'");
     if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer("Action not recognized.", show_alert=True); context.bot_data[f'answered_{query_id}'] = True
     return None
 
 async def handle_language_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; data = query.data; log.debug(f"Language Callback Route: Data='{data}'"); query_id = query.id
+    query = update.callback_query; data = query.data; user_id, lang = get_user_id_and_lang(update,context); query_id = query.id
+    log.info(f"handle_language_callback: User {user_id}, Data {data}, Lang {lang}")
     if data.startswith(CALLBACK_LANG_PREFIX): return await set_language_handler(update, context)
     else: log.warning(f"Unhandled LANG CB: Data='{data}'");
     if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer("Action not recognized.", show_alert=True); context.bot_data[f'answered_{query_id}'] = True
     return None
 
 async def handle_interval_callback(update: Update, context: CallbackContext) -> str | int | None:
-     query = update.callback_query; data = query.data; log.debug(f"Interval Callback Route: Data='{data}'"); query_id = query.id
+     query = update.callback_query; data = query.data; user_id, lang = get_user_id_and_lang(update,context); query_id = query.id
+     log.info(f"handle_interval_callback: User {user_id}, Data {data}, Lang {lang}")
      if data.startswith(CALLBACK_INTERVAL_PREFIX): return await process_interval_callback(update, context)
      else: log.warning(f"Unhandled INTERVAL CB: Data='{data}'");
      if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer("Action not recognized.", show_alert=True); context.bot_data[f'answered_{query_id}'] = True
      return None
 
 async def handle_generic_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; action = data.split(CALLBACK_GENERIC_PREFIX)[1] if CALLBACK_GENERIC_PREFIX in data else None; log.debug(f"Generic Callback Route: Action='{action}', Data='{data}'"); query_id = query.id
+    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; action = data.split(CALLBACK_GENERIC_PREFIX)[1] if CALLBACK_GENERIC_PREFIX in data else None; query_id = query.id
+    log.info(f"handle_generic_callback: User {user_id}, Data {data}, Action {action}, Lang {lang}")
     if action == "cancel":
         clear_conversation_data(context); await _send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang=lang))
         if is_admin(user_id): return admin_command(update, context)
@@ -1206,10 +1395,16 @@ async def handle_generic_callback(update: Update, context: CallbackContext) -> s
 
 async def main_callback_handler(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
-    if not query or not query.data: log.warning("Callback without query/data."); return None
-    data = query.data; user_id, lang = get_user_id_and_lang(update, context)
-    log.info(f"CB Route: User={user_id}, Data='{data}'")
-    next_state = None; query_id = query.id
+    if not query or not query.data: 
+        log.warning("main_callback_handler: Callback received without query or query.data.")
+        return None
+        
+    data = query.data
+    user_id, lang = get_user_id_and_lang(update, context) # Fetch lang using user_id from query
+    log.info(f"main_callback_handler: User={user_id}, Data='{data}', Lang={lang}")
+    
+    next_state = None
+    query_id = query.id
 
     try:
         if data.startswith(CALLBACK_CLIENT_PREFIX): next_state = await handle_client_callback(update, context)
@@ -1221,22 +1416,32 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
         elif data.startswith(CALLBACK_INTERVAL_PREFIX): next_state = await handle_interval_callback(update, context)
         elif data.startswith(CALLBACK_GENERIC_PREFIX): next_state = await handle_generic_callback(update, context)
         else:
-            log.warning(f"Unhandled CB prefix: User={user_id}, Data='{data}'")
-            if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer("Unknown button.", show_alert=True); context.bot_data[f'answered_{query_id}'] = True
-            next_state = ConversationHandler.END
+            log.warning(f"main_callback_handler: Unhandled CB prefix. User={user_id}, Data='{data}'")
+            if query_id and not context.bot_data.get(f'answered_{query_id}', False): 
+                await query.answer("Unknown button.", show_alert=True)
+                context.bot_data[f'answered_{query_id}'] = True
+            next_state = ConversationHandler.END # Or return to a main menu if appropriate
 
+        # Ensure callback is answered if not done by specific handlers (most should do it)
         if query_id and not context.bot_data.get(f'answered_{query_id}', False):
-             await query.answer(); context.bot_data[f'answered_{query_id}'] = True
+             await query.answer()
+             context.bot_data[f'answered_{query_id}'] = True
+             log.debug(f"main_callback_handler: Answered CB {query_id} (fallback)")
+
     except Exception as e:
-        log.error(f"Error processing callback data '{data}' for user {user_id}: {e}", exc_info=True)
+        log.error(f"main_callback_handler: Error processing callback data '{data}' for user {user_id}: {e}", exc_info=True)
         try:
-             if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True); context.bot_data[f'answered_{query_id}'] = True
-        except Exception: pass
-        # Make sure error_handler is called from a non-async context if it itself is sync
-        # If error_handler is async, it should be context.dispatcher.run_async(error_handler, ...)
-        # However, error_handler is now sync, so this is fine.
+             if query_id and not context.bot_data.get(f'answered_{query_id}', False): 
+                 await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+                 context.bot_data[f'answered_{query_id}'] = True
+        except Exception as cb_answer_err:
+            log.error(f"main_callback_handler: Error answering callback query after exception: {cb_answer_err}")
+        
+        # error_handler is sync, so schedule its _send_or_edit_message call
         context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'error_generic', lang=lang))
         next_state = ConversationHandler.END
+        
+    log.info(f"main_callback_handler: Returning next_state: {next_state} for User={user_id}, Data='{data}'")
     return next_state
 
 main_conversation = ConversationHandler(
