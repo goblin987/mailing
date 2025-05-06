@@ -428,7 +428,7 @@ async def process_admin_invite_details(update: Update, context: CallbackContext)
         bots_needed = int(match.group(2))
         if days <= 0 or bots_needed <= 0:
             raise ValueError("Days and bots must be positive")
-    except (ValueError, AssertionError): # Catch the raised ValueError here
+    except (ValueError, AssertionError):
         await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_numbers', lang=lang))
         return STATE_WAITING_FOR_SUB_DETAILS
     await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_generating', lang=lang)); code = str(uuid.uuid4().hex)[:8]
@@ -450,7 +450,7 @@ async def process_admin_extend_days(update: Update, context: CallbackContext) ->
         days_to_add = int(days_str)
         if days_to_add <= 0:
             raise ValueError("Days must be positive")
-    except (ValueError, AssertionError): # Catch the raised ValueError here
+    except (ValueError, AssertionError):
         await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_days', lang=lang))
         return STATE_WAITING_FOR_EXTEND_DAYS
     client = db.find_client_by_code(code)
@@ -474,7 +474,7 @@ async def process_admin_add_bots_count(update: Update, context: CallbackContext)
         count_to_add = int(count_str)
         if count_to_add <= 0:
             raise ValueError("Count must be positive")
-    except (ValueError, AssertionError): # Catch the raised ValueError here
+    except (ValueError, AssertionError):
         await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_invalid_count', lang=lang))
         return STATE_WAITING_FOR_ADD_USERBOTS_COUNT
     available_bots = db.get_unassigned_userbots(limit=count_to_add)
@@ -749,12 +749,11 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
             part_markup = markup if i == len(parts) - 1 else None
             try:
                 await context.bot.send_message(user_id, part, parse_mode=ParseMode.HTML, reply_markup=part_markup, disable_web_page_preview=True)
-                # The problematic 'if' statement was here
                 if i < len(parts) - 1: # Correctly indented under the try
                     await asyncio.sleep(0.5)
             except Exception as send_e:
                 log.error(f"Error sending split join results part {i+1}: {send_e}")
-                break # Stop sending further parts on error
+                break
     else: await _send_or_edit_message(update, context, all_results_text, reply_markup=markup, disable_web_page_preview=True)
     clear_conversation_data(context); return ConversationHandler.END
 
@@ -831,8 +830,13 @@ async def task_prompt_start_time(update: Update, context: CallbackContext) -> in
 async def process_task_start_time(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); time_str = update.message.text.strip(); task_settings = context.user_data.get(CTX_TASK_SETTINGS)
     if task_settings is None: await _send_or_edit_message(update, context, get_text(user_id, 'session_expired', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
-    try: hour, minute = map(int, time_str.split(':')); if not (0 <= hour <= 23 and 0 <= minute <= 59): raise ValueError("Invalid hour/minute")
-    except (ValueError, TypeError): await _send_or_edit_message(update, context, get_text(user_id, 'task_error_invalid_time', lang=lang)); return STATE_WAITING_FOR_START_TIME
+    try:
+        hour, minute = map(int, time_str.split(':'))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59): # Ensure this check is here
+            raise ValueError("Invalid hour/minute")
+    except (ValueError, TypeError):
+        await _send_or_edit_message(update, context, get_text(user_id, 'task_error_invalid_time', lang=lang))
+        return STATE_WAITING_FOR_START_TIME
     try:
         now_local = datetime.now(LITHUANIA_TZ); input_time_obj = datetime.strptime(f"{hour:02}:{minute:02}", "%H:%M").time()
         target_local_dt_naive = datetime.combine(now_local.date(), input_time_obj); target_local_dt = LITHUANIA_TZ.localize(target_local_dt_naive)
@@ -936,7 +940,7 @@ async def admin_list_userbots(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
     try:
         current_page = 0
-        if '?' in query.data:
+        if query and query.data and '?' in query.data: # Added query and query.data check
             _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     all_bots = db.get_all_userbots()
@@ -955,7 +959,7 @@ async def admin_select_userbot_to_remove(update: Update, context: CallbackContex
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
     try:
         current_page = 0
-        if '?' in query.data:
+        if query and query.data and '?' in query.data: # Added query and query.data check
             _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     all_bots = db.get_all_userbots()
@@ -1016,7 +1020,7 @@ async def admin_view_subscriptions(update: Update, context: CallbackContext) -> 
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
     try:
         current_page = 0
-        if '?' in query.data:
+        if query and query.data and '?' in query.data: # Added query and query.data check
             _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     subs = db.get_all_subscriptions()
