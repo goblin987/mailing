@@ -150,6 +150,23 @@ def init_db():
             FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
         );
 
+        CREATE TABLE IF NOT EXISTS admin_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            userbot_phone TEXT NOT NULL,
+            message TEXT NOT NULL,
+            schedule TEXT NOT NULL, -- Cron format
+            target TEXT NOT NULL, -- Group username or ID
+            status TEXT CHECK(status IN ('active', 'inactive')) DEFAULT 'inactive' NOT NULL,
+            last_run INTEGER, -- Unix timestamp of last run
+            next_run INTEGER, -- Unix timestamp of next scheduled run
+            created_by INTEGER NOT NULL, -- Admin user ID
+            created_at INTEGER NOT NULL, -- Unix timestamp
+            FOREIGN KEY (userbot_phone) REFERENCES userbots(phone_number) ON DELETE CASCADE,
+            FOREIGN KEY (created_by) REFERENCES clients(user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_tasks_status ON admin_tasks (status);
+        CREATE INDEX IF NOT EXISTS idx_admin_tasks_next_run ON admin_tasks (next_run);
+
         -- Create Indexes for faster lookups on frequently queried columns
         CREATE INDEX IF NOT EXISTS idx_clients_user_id ON clients (user_id);
         CREATE INDEX IF NOT EXISTS idx_userbots_assigned_client ON userbots (assigned_client);
@@ -1058,6 +1075,156 @@ def store_invite_code(code, days):
             return True
     except sqlite3.Error as e:
         log.error(f"DB Error storing invite code: {e}")
+        return False
+
+# --- Admin Task Functions ---
+def create_admin_task(userbot_phone: str, message: str, schedule: str, target: str, created_by: int) -> int | None:
+    """Creates a new admin task and returns its ID."""
+    sql = """
+    INSERT INTO admin_tasks (userbot_phone, message, schedule, target, created_by, created_at, status)
+    VALUES (?, ?, ?, ?, ?, ?, 'inactive')
+    """
+    try:
+        conn = _get_db_connection()
+        with db_lock:
+            cursor = conn.cursor()
+            now_ts = int(datetime.now(UTC_TZ).timestamp())
+            cursor.execute(sql, (userbot_phone, message, schedule, target, created_by, now_ts))
+            return cursor.lastrowid
+    except sqlite3.Error as e:
+        log.error(f"DB Error creating admin task: {e}")
+        return None
+
+def get_admin_tasks(page: int = 0, per_page: int = 10) -> tuple[list, int]:
+    """Returns a tuple of (tasks list, total count)."""
+    sql_count = "SELECT COUNT(*) FROM admin_tasks"
+    sql_tasks = """
+    SELECT t.*, u.status as userbot_status 
+    FROM admin_tasks t 
+    LEFT JOIN userbots u ON t.userbot_phone = u.phone_number 
+    ORDER BY t.id DESC LIMIT ? OFFSET ?
+    """
+    try:
+        conn = _get_db_connection()
+        with db_lock:
+            cursor = conn.cursor()
+            cursor.execute(sql_count)
+            total = cursor.fetchone()[0]
+            
+            cursor.execute(sql_tasks, (per_page, page * per_page))
+            tasks = cursor.fetchall()
+            return list(tasks), total
+    except sqlite3.Error as e:
+        log.error(f"DB Error getting admin tasks: {e}")
+        return [], 0
+
+def get_admin_task(task_id: int) -> dict | None:
+    """Gets a single admin task by ID."""
+    sql = """
+    SELECT t.*, u.status as userbot_status 
+    FROM admin_tasks t 
+    LEFT JOIN userbots u ON t.userbot_phone = u.phone_number 
+    WHERE t.id = ?
+    """
+    try:
+        conn = _get_db_connection()
+        with db_lock:
+            cursor = conn.cursor()
+            cursor.execute(sql, (task_id,))
+            task = cursor.fetchone()
+            return dict(task) if task else None
+    except sqlite3.Error as e:
+        log.error(f"DB Error getting admin task {task_id}: {e}")
+        return None
+
+def update_admin_task(task_id: int, updates: dict) -> bool:
+    """Updates an admin task. Updates should be a dict of column:value pairs."""
+    allowed_fields = {'message', 'schedule', 'target', 'status'}
+    update_fields = {k: v for k, v in updates.items() if k in allowed_fields}
+    
+    if not update_fields:
+        return False
+        
+    sql = f"""
+    UPDATE admin_tasks 
+    SET {', '.join(f'{k} = ?' for k in update_fields.keys())}
+    WHERE id = ?
+    """
+    try:
+        conn = _get_db_connection()
+        with db_lock:
+            cursor = conn.cursor()
+            cursor.execute(sql, (*update_fields.values(), task_id))
+            return cursor.rowcount > 0
+    except sqlite3.Error as e:
+        log.error(f"DB Error updating admin task {task_id}: {e}")
+        return False
+
+def delete_admin_task(task_id: int) -> bool:
+    """Deletes an admin task."""
+    sql = "DELETE FROM admin_tasks WHERE id = ?"
+    try:
+        conn = _get_db_connection()
+        with db_lock:
+            cursor = conn.cursor()
+            cursor.execute(sql, (task_id,))
+            return cursor.rowcount > 0
+    except sqlite3.Error as e:
+        log.error(f"DB Error deleting admin task {task_id}: {e}")
+        return False
+
+def toggle_admin_task_status(task_id: int) -> bool:
+    """Toggles an admin task's status between active and inactive."""
+    sql = """
+    UPDATE admin_tasks 
+    SET status = CASE WHEN status = 'active' THEN 'inactive' ELSE 'active' END 
+    WHERE id = ?
+    """
+    try:
+        conn = _get_db_connection()
+        with db_lock:
+            cursor = conn.cursor()
+            cursor.execute(sql, (task_id,))
+            return cursor.rowcount > 0
+    except sqlite3.Error as e:
+        log.error(f"DB Error toggling admin task {task_id}: {e}")
+        return False
+
+def get_active_admin_tasks_to_run(current_time_ts: int) -> list:
+    """Returns active admin tasks that are due to run."""
+    sql = """
+    SELECT t.*, u.status as userbot_status 
+    FROM admin_tasks t 
+    JOIN userbots u ON t.userbot_phone = u.phone_number 
+    WHERE t.status = 'active' 
+    AND u.status = 'active'
+    AND (t.next_run IS NULL OR t.next_run <= ?)
+    """
+    try:
+        conn = _get_db_connection()
+        with db_lock:
+            cursor = conn.cursor()
+            cursor.execute(sql, (current_time_ts,))
+            return cursor.fetchall()
+    except sqlite3.Error as e:
+        log.error(f"DB Error getting active admin tasks: {e}")
+        return []
+
+def update_admin_task_run(task_id: int, last_run: int, next_run: int, error: str = None) -> bool:
+    """Updates the last run and next run times for an admin task."""
+    sql = """
+    UPDATE admin_tasks 
+    SET last_run = ?, next_run = ?, status = CASE WHEN ? IS NOT NULL THEN 'inactive' ELSE status END
+    WHERE id = ?
+    """
+    try:
+        conn = _get_db_connection()
+        with db_lock:
+            cursor = conn.cursor()
+            cursor.execute(sql, (last_run, next_run, error, task_id))
+            return cursor.rowcount > 0
+    except sqlite3.Error as e:
+        log.error(f"DB Error updating admin task run {task_id}: {e}")
         return False
 
 # --- Initialize DB on Import ---
