@@ -1198,3 +1198,6 @@ main_conversation = ConversationHandler(
     name="main_conversation",
     persistent=True,
 )
+
+log.info("Handlers module loaded with corrected sync/async definitions.")
+# --- END OF FILE handlers.py ---
