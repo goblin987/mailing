@@ -44,6 +44,12 @@ from config import (
     CALLBACK_INTERVAL_PREFIX, CALLBACK_GENERIC_PREFIX
 )
 from translations import get_text, language_names, translations
+from utils import get_user_id_and_lang, send_or_edit_message
+from admin_handlers import (
+    admin_process_task_message,
+    admin_process_task_schedule,
+    admin_process_task_target
+)
 
 # --- Constants ---
 ITEMS_PER_PAGE = 5 # For pagination in lists
@@ -90,124 +96,6 @@ def clear_conversation_data(context: CallbackContext):
         context.user_data[CTX_LANG] = lang
         
     log.debug(f"Cleared volatile conversation user_data for user {user_id or 'N/A'}")
-
-def get_user_id_and_lang(update: Update, context: CallbackContext) -> tuple[int | None, str]:
-    user_id = context.user_data.get(CTX_USER_ID)
-    lang = context.user_data.get(CTX_LANG)
-
-    if user_id is None:
-        if update and update.effective_user:
-            user_id = update.effective_user.id
-            context.user_data[CTX_USER_ID] = user_id 
-    
-    if lang is None: 
-        if user_id is not None: 
-            lang = db.get_user_language(user_id)
-            context.user_data[CTX_LANG] = lang 
-        else:
-            lang = 'en'
-    
-    final_lang = lang if lang is not None else 'en'
-
-    if user_id is not None and context.user_data.get(CTX_LANG) != final_lang:
-        context.user_data[CTX_LANG] = final_lang
-            
-    return user_id, final_lang
-
-def _send_or_edit_message(update: Update, context: CallbackContext, text: str, **kwargs):
-    user_id, lang = get_user_id_and_lang(update, context)
-    log.info(f"_send_or_edit_message: START - User: {user_id}, Lang: {lang}, Text: '{html.escape(text[:70])}...', Kwargs: {kwargs}")
-
-    parse_mode = kwargs.get('parse_mode', ParseMode.HTML)
-    kwargs['parse_mode'] = parse_mode
-
-    chat_id = None
-    if update and update.effective_chat:
-        chat_id = update.effective_chat.id
-    elif user_id: 
-        chat_id = user_id
-    
-    log.debug(f"_send_or_edit_message: Determined chat_id: {chat_id}")
-
-    if not chat_id:
-        log.error(f"_send_or_edit_message: CRITICAL - Cannot determine chat_id. User ID: {user_id}. Update provided: {update is not None}")
-        return
-
-    message_id_to_edit = None
-    if update.callback_query:
-        message_id_to_edit = update.callback_query.message.message_id
-        # Answer callback query to remove loading state
-        try:
-            update.callback_query.answer()
-        except Exception as e:
-            log.warning(f"Failed to answer callback query: {e}")
-
-    log.debug(f"_send_or_edit_message: Final message_id_to_edit (for editing attempts): {message_id_to_edit}")
-
-    try:
-        if message_id_to_edit:
-            # Try to edit existing message
-            log.info(f"_send_or_edit_message: Attempting to EDIT message {message_id_to_edit} in chat {chat_id}")
-            try:
-                result = context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id_to_edit,
-                    text=text,
-                    **kwargs
-                )
-                log.info(f"_send_or_edit_message: Successfully EDITED message {message_id_to_edit}")
-                return result
-            except BadRequest as e:
-                if "message is not modified" in str(e).lower():
-                    log.debug(f"Message {message_id_to_edit} not modified (content unchanged)")
-                    return None
-                log.warning(f"Failed to edit message {message_id_to_edit}: {e}")
-                # Fall through to sending new message
-        
-        # If we have an incoming message to reply to, use reply
-        if update.message:
-            log.info(f"_send_or_edit_message: Attempting to REPLY to incoming message {update.message.message_id} in chat {chat_id}")
-            result = context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_to_message_id=update.message.message_id,
-                **kwargs
-            )
-            log.info(f"_send_or_edit_message: Successfully REPLIED with new message {result.message_id}")
-            return result
-        
-        # Otherwise send a new message
-        log.info(f"_send_or_edit_message: Attempting to SEND new message to chat {chat_id}")
-        result = context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            **kwargs
-        )
-        log.info(f"_send_or_edit_message: Successfully SENT new message {result.message_id}")
-        return result
-
-    except RetryAfter as e:
-        log.warning(f"Rate limit hit when sending message to {chat_id}: {e}")
-        time.sleep(e.retry_after)
-        return _send_or_edit_message(update, context, text, **kwargs)  # Retry once after waiting
-    except Exception as e:
-        log.error(f"Error sending/editing message to {chat_id}: {e}", exc_info=True)
-        return None
-
-def _show_menu_async(update: Update, context: CallbackContext, menu_builder_func):
-    user_id, lang = get_user_id_and_lang(update, context)
-    log.info(f"_show_menu_async: Building menu with {menu_builder_func.__name__} for user {user_id}, lang {lang}")
-    
-    message, markup, parse_mode = menu_builder_func(user_id, context)
-    if not message:
-        log.error(f"_show_menu_async: Menu builder {menu_builder_func.__name__} returned empty message for user {user_id}. Aborting send.")
-        return
-    
-    log.info(f"_show_menu_async: Menu built. Message: '{html.escape(message[:70])}...'. Markup: {markup is not None}. ParseMode: {parse_mode}")
-    
-    result = _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode)
-    log.info(f"_show_menu_async: Finished attempt to send/edit menu for user {user_id}")
-    return result
 
 def error_handler(update: object, context: CallbackContext) -> None:
     log.error(f"Exception while handling an update:", exc_info=context.error)
@@ -1575,10 +1463,10 @@ main_conversation = ConversationHandler(
 
 log.info("Handlers module loaded with corrected sync/async definitions.")
 
-# Add new states for admin task management
-STATE_ADMIN_TASK_MESSAGE = 'STATE_ADMIN_TASK_MESSAGE'
-STATE_ADMIN_TASK_SCHEDULE = 'STATE_ADMIN_TASK_SCHEDULE'
-STATE_ADMIN_TASK_TARGET = 'STATE_ADMIN_TASK_TARGET'
+# Remove duplicate state definitions
+# STATE_ADMIN_TASK_MESSAGE = 'STATE_ADMIN_TASK_MESSAGE'
+# STATE_ADMIN_TASK_SCHEDULE = 'STATE_ADMIN_TASK_SCHEDULE'
+# STATE_ADMIN_TASK_TARGET = 'STATE_ADMIN_TASK_TARGET'
 
 def admin_task_menu(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
@@ -1821,4 +1709,6 @@ def admin_delete_task(update: Update, context: CallbackContext) -> int:
     
     # Return to task list
     return admin_view_tasks(update, context)
+
+
 
