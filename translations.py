@@ -454,4 +454,3 @@ def get_text(user_id, key, lang_override=None, **kwargs):
 
 log.info("Translations module loaded with updated keys.")
 # --- END OF FILE translations.py ---
-
