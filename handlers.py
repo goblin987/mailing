@@ -133,7 +133,8 @@ async def reply_or_edit_text(update: Update, context: CallbackContext, text: str
     # Try to get message_id for editing
     if update.callback_query:
         message_id = update.callback_query.message.message_id
-    elif context.user_data and 'message_id' in context.user_data: # Check if we stored it for editing
+    # Check context only if it exists
+    elif context.user_data and 'message_id' in context.user_data:
         message_id = context.user_data.get(CTX_MESSAGE_ID)
 
     # Ensure reply_markup is properly handled
@@ -250,7 +251,7 @@ def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> s
 def build_client_menu(user_id, context: CallbackContext):
     """Builds the client menu message and keyboard."""
     client_info = db.find_client_by_user_id(user_id)
-    lang = context.user_data.get(CTX_LANG, 'en')
+    lang = context.user_data.get(CTX_LANG, 'en') if context.user_data else 'en'
     if not client_info: return get_text(user_id, 'unknown_user', lang=lang), None, ParseMode.HTML
 
     code = client_info['invitation_code']
@@ -304,7 +305,7 @@ def build_client_menu(user_id, context: CallbackContext):
 
 def build_admin_menu(user_id, context: CallbackContext):
     """Builds the admin menu message and keyboard."""
-    lang = context.user_data.get(CTX_LANG, 'en')
+    lang = context.user_data.get(CTX_LANG, 'en') if context.user_data else 'en'
     title = f"<b>{get_text(user_id, 'admin_panel_title', lang=lang)}</b>"
     parse_mode = ParseMode.HTML
     keyboard = [
@@ -333,14 +334,18 @@ def build_pagination_buttons(base_callback_data: str, current_page: int, total_i
 
     row = []
     if current_page > 0:
-        row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"{base_callback_data}?page={current_page - 1}"))
+        # Use text from translations
+        prev_text = get_text(0, 'pagination_prev', lang='en')
+        row.append(InlineKeyboardButton(prev_text, callback_data=f"{base_callback_data}?page={current_page - 1}"))
     # Add page indicator only if there's more than one page
     if total_pages > 1:
          # Use a generic prefix for no-op button
          page_text = get_text(0,'pagination_page',lang='en').format(current=current_page + 1, total=total_pages)
          row.append(InlineKeyboardButton(page_text, callback_data=f"{CALLBACK_GENERIC_PREFIX}noop"))
     if current_page < total_pages - 1:
-        row.append(InlineKeyboardButton("Next ➡️", callback_data=f"{base_callback_data}?page={current_page + 1}"))
+        # Use text from translations
+        next_text = get_text(0, 'pagination_next', lang='en')
+        row.append(InlineKeyboardButton(next_text, callback_data=f"{base_callback_data}?page={current_page + 1}"))
 
     if row:
         buttons.append(row)
@@ -348,6 +353,7 @@ def build_pagination_buttons(base_callback_data: str, current_page: int, total_i
 
 # --- Command Handlers ---
 
+# *** Added await where needed ***
 async def start_command(update: Update, context: CallbackContext) -> str | int:
     """Handles /start: directs users based on status."""
     user_id, lang = get_user_id_and_lang(update, context)
@@ -357,21 +363,24 @@ async def start_command(update: Update, context: CallbackContext) -> str | int:
     # Check if admin first
     if is_admin(user_id):
         log.info(f"Admin user {user_id} used /start, showing admin menu.")
-        return await admin_command(update, context) # Show admin menu directly
+        # Need to await because admin_command sends a message and returns END state
+        return await admin_command(update, context)
 
     # Check if client
     client_info = db.find_client_by_user_id(user_id)
     if client_info:
         now_ts = int(datetime.now(UTC_TZ).timestamp())
         if client_info['subscription_end'] < now_ts:
-            await reply_or_edit_text(update, context, get_text(user_id, 'subscription_expired', lang=lang)) # Use specific key if available
+            await reply_or_edit_text(update, context, get_text(user_id, 'subscription_expired', lang=lang))
             return ConversationHandler.END
         else:
+            # Need to await because client_menu sends a message and returns END state
             return await client_menu(update, context)
     else:
         await reply_or_edit_text(update, context, get_text(user_id, 'welcome', lang=lang))
         return STATE_WAITING_FOR_CODE
 
+# *** Added await where needed ***
 async def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
     """Handles the user sending an invitation code."""
     user_id, lang = get_user_id_and_lang(update, context)
@@ -391,10 +400,11 @@ async def process_invitation_code(update: Update, context: CallbackContext) -> s
         db.log_event_db("Client Activated", f"Code: {code}", user_id=user_id)
         # Update language in context immediately after successful activation
         context.user_data[CTX_LANG] = db.get_user_language(user_id)
-        lang = context.user_data[CTX_LANG]
+        lang = context.user_data[CTX_LANG] # Reload lang
         await reply_or_edit_text(update, context, text_to_send)
         # Automatically show the client menu after successful activation
-        return await client_menu(update, context) # Transition to client menu (ends conversation state)
+        # Need to await because client_menu sends a message and returns END state
+        return await client_menu(update, context)
     else:
         log.warning(f"Failed activation user {user_id} code {code}: {status_key}")
         await reply_or_edit_text(update, context, text_to_send)
@@ -425,33 +435,33 @@ async def cancel_command(update: Update, context: CallbackContext) -> int:
     """Generic cancel handler."""
     user_id, lang = get_user_id_and_lang(update, context)
     log.info(f"Cancel cmd: UserID={user_id}")
-    current_state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') # Check state
+    current_state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') if context.user_data else 'None' # Check state safely
     log.debug(f"Cancel called from state: {current_state}")
 
     await reply_or_edit_text(update, context, get_text(user_id, 'cancelled', lang=lang))
     clear_conversation_data(context)
     return ConversationHandler.END
 
+# *** Added await where needed ***
 async def conversation_fallback(update: Update, context: CallbackContext) -> int:
      """Handles messages not matched in a conversation state."""
      user_id, lang = get_user_id_and_lang(update, context)
-     state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') # Check state
+     state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') if context.user_data else 'None' # Check state safely
      msg_text = update.effective_message.text if update.effective_message else 'Non-text update'
      log.warning(f"Conv fallback: UserID={user_id}. State={state}. Msg='{msg_text[:50]}...'")
 
      # Check if it's a command that should maybe end the conversation
      if update.message and update.message.text and update.message.text.startswith('/'):
          if update.message.text == '/cancel':
-             return await cancel_command(update, context)
+             return await cancel_command(update, context) # await needed
          if update.message.text == '/start':
-             # Let start command handle redirection
              await reply_or_edit_text(update, context, get_text(user_id, 'state_cleared', lang=lang))
              clear_conversation_data(context)
-             return await start_command(update, context)
+             return await start_command(update, context) # await needed
          if update.message.text == '/admin' and is_admin(user_id):
              await reply_or_edit_text(update, context, get_text(user_id, 'state_cleared', lang=lang))
              clear_conversation_data(context)
-             return await admin_command(update, context)
+             return await admin_command(update, context) # await needed
 
      # If not a recognized command, send fallback message and end
      await reply_or_edit_text(update, context, get_text(user_id, 'conversation_fallback', lang=lang))
@@ -473,7 +483,7 @@ async def client_menu(update: Update, context: CallbackContext) -> int:
     # Showing the menu is an end state for conversation flows
     return ConversationHandler.END
 
-async def client_ask_select_language(update: Update, context: CallbackContext):
+async def client_ask_select_language(update: Update, context: CallbackContext) -> int: # Return state
     """Shows language selection buttons."""
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -492,9 +502,11 @@ async def client_ask_select_language(update: Update, context: CallbackContext):
     buttons.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")])
     markup = InlineKeyboardMarkup(buttons)
     await reply_or_edit_text(update, context, get_text(user_id, 'select_language', lang=lang), reply_markup=markup)
-    return ConversationHandler.END # Remains end state, selection handled by callback
+    # This doesn't change the conversation state, just updates the message
+    # It relies on the callback handler (main_callback_handler) to process the language selection
+    return ConversationHandler.END # Or return the CURRENT state if part of a larger flow? Let's end.
 
-async def set_language_handler(update: Update, context: CallbackContext):
+async def set_language_handler(update: Update, context: CallbackContext) -> int: # Return state
     """Handles language selection callback."""
     query = update.callback_query
     user_id = query.from_user.id
@@ -595,7 +607,12 @@ async def process_admin_api_hash(update: Update, context: CallbackContext) -> st
              else:
                  db.update_userbot_status(phone, 'active') # Mark as active if exists
              # Trigger runtime initialization/check
-             asyncio.create_task(telethon_api.get_userbot_runtime_info(phone))
+             # We need to run this async task but the handler itself needs to return END
+             context.application.create_task(telethon_api.get_userbot_runtime_info(phone)) # Use application context if PTB >= v20
+             # For PTB v13, use asyncio.create_task if running in an async context already
+             # Or use context.dispatcher.run_async if available and appropriate
+             # Using simple asyncio.create_task for now
+             # asyncio.create_task(telethon_api.get_userbot_runtime_info(phone))
              await reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_already_auth', lang=lang, display_name=phone))
              clear_conversation_data(context)
              return ConversationHandler.END
@@ -632,6 +649,8 @@ async def process_admin_userbot_code(update: Update, context: CallbackContext) -
     code = update.message.text.strip()
     auth_data = context.user_data.get(CTX_AUTH_DATA)
     phone = context.user_data.get(CTX_PHONE, "N/A")
+    api_id = context.user_data.get(CTX_API_ID) # Need these for DB save
+    api_hash = context.user_data.get(CTX_API_HASH) # Need these for DB save
 
     if not auth_data:
         await reply_or_edit_text(update, context, get_text(user_id, 'session_expired', lang=lang))
@@ -657,8 +676,19 @@ async def process_admin_userbot_code(update: Update, context: CallbackContext) -
             phone_num = comp_data.get('phone', phone)
             username = comp_data.get('username')
             display_name = f"@{username}" if username else phone_num
+
+            # Calculate session_file_rel correctly here
+            safe_phone_part = re.sub(r'[^\d]', '', phone_num)
+            if not safe_phone_part: safe_phone_part = f"unknown_{random.randint(1000,9999)}"
+            session_file_rel = f"{safe_phone_part}.session"
+
+            # Pass the correct info to add_userbot
+            db_ok = db.add_userbot(phone_num, session_file_rel, api_id, api_hash, 'active', username, None, None)
+            if db_ok: log.info(f"Userbot {phone_num} added/updated in DB after code auth.")
+            else: log.error(f"Auth OK for {phone_num}, but DB add/update failed.")
+
             await reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_add_success', lang=lang, display_name=display_name))
-            # Trigger runtime initialization for the newly added bot
+            # Trigger runtime initialization for the newly added/updated bot
             asyncio.create_task(telethon_api.get_userbot_runtime_info(phone_num))
             clear_conversation_data(context)
             return ConversationHandler.END
@@ -728,11 +758,10 @@ async def process_admin_userbot_password(update: Update, context: CallbackContex
             username = comp_data.get('username')
             display_name = f"@{username}" if username else phone_num
 
-            # --- **FIXED:** Calculate session_file_rel correctly here too ---
+            # Calculate session_file_rel correctly here
             safe_phone_part = re.sub(r'[^\d]', '', phone_num)
             if not safe_phone_part: safe_phone_part = f"unknown_{random.randint(1000,9999)}"
             session_file_rel = f"{safe_phone_part}.session"
-            # --- End Fix ---
 
             # Use the add_userbot function which handles inserts/updates
             db_ok = db.add_userbot(phone_num, session_file_rel, api_id, api_hash, 'active', username, None, None)
@@ -802,14 +831,6 @@ async def process_admin_invite_details(update: Update, context: CallbackContext)
     log.info(f"Admin {user_id} requesting code for {days} days, {bots_needed} bots.")
     await reply_or_edit_text(update, context, get_text(user_id, 'admin_invite_generating', lang=lang)) # Indicate processing
 
-    # Check availability of unassigned bots (THIS IS OPTIONAL - Original code didn't require assignment here)
-    # If you want to pre-assign bots with the code, uncomment and adapt this section
-    # available_bots = db.get_unassigned_userbots(limit=bots_needed)
-    # if len(available_bots) < bots_needed:
-    #     await reply_or_edit_text(update, context, get_text(user_id, 'admin_invite_no_bots_available', lang=lang, needed=bots_needed, available=len(available_bots)))
-    #     clear_conversation_data(context)
-    #     return ConversationHandler.END
-
     # Generate unique code (UUID based)
     code = str(uuid.uuid4().hex)[:8] # 8-char hex code
 
@@ -826,8 +847,6 @@ async def process_admin_invite_details(update: Update, context: CallbackContext)
             update, context,
             get_text(user_id, 'admin_invite_success', lang=lang, code=code, end_date=end_date_str, count=bots_needed)
         )
-        # Optionally assign bots here if pre-assignment logic was used
-        # db.assign_userbots_to_client(code, available_bots)
     else:
         db.log_event_db("Invite Gen Failed", f"Code: {code} (duplicate?)", user_id=user_id)
         await reply_or_edit_text(update, context, get_text(user_id, 'admin_invite_db_error', lang=lang)) # Or a specific "code exists" error
@@ -959,7 +978,7 @@ async def process_admin_add_bots_count(update: Update, context: CallbackContext)
     success, message = db.assign_userbots_to_client(code, available_bots) # Pass the list of phones
 
     if success:
-        client_user_id = db.find_client_by_code(code)['user_id']
+        client_user_id = db.find_client_by_code(code)['user_id'] if db.find_client_by_code(code) else None
         db.log_event_db("Userbots Assigned", f"Code: {code}, Count: {len(available_bots)}, Bots: {','.join(available_bots)}", user_id=user_id, client_id=client_user_id)
 
         # Use different message for partial success
@@ -1013,6 +1032,7 @@ async def client_folder_menu(update: Update, context: CallbackContext) -> int:
     await reply_or_edit_text(update, context, text, reply_markup=markup)
     return ConversationHandler.END # Folder menu is an end state
 
+# *** Added await where needed ***
 async def process_folder_name(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
     folder_name = update.message.text.strip()
@@ -1032,7 +1052,7 @@ async def process_folder_name(update: Update, context: CallbackContext) -> int:
             get_text(user_id, 'folder_create_success', lang=lang, name=html.escape(folder_name))
         )
         # Go back to folder menu after creation
-        return await client_folder_menu(update, context)
+        return await client_folder_menu(update, context) # await added
     elif folder_id_or_status is None: # Indicates duplicate name
          await reply_or_edit_text(update, context, get_text(user_id, 'folder_create_error_exists', lang=lang, name=html.escape(folder_name)))
          return STATE_WAITING_FOR_FOLDER_NAME # Allow user to enter a different name
@@ -1042,6 +1062,7 @@ async def process_folder_name(update: Update, context: CallbackContext) -> int:
         clear_conversation_data(context)
         return ConversationHandler.END
 
+# *** Added await where needed ***
 async def client_select_folder_to_edit_or_delete(update: Update, context: CallbackContext, action: str) -> int:
     """Generic function to show folder list for selection (edit/delete)."""
     query = update.callback_query
@@ -1052,7 +1073,7 @@ async def client_select_folder_to_edit_or_delete(update: Update, context: Callba
     folders = db.get_folders_by_user(user_id)
     if not folders:
         await query.answer(get_text(user_id, 'folder_no_folders', lang=lang), show_alert=True)
-        return await client_folder_menu(update, context) # Go back if no folders
+        return await client_folder_menu(update, context) # await added
 
     total_items = len(folders)
     start_index = current_page * ITEMS_PER_PAGE
@@ -1077,8 +1098,10 @@ async def client_select_folder_to_edit_or_delete(update: Update, context: Callba
 
     markup = InlineKeyboardMarkup(keyboard)
     await reply_or_edit_text(update, context, text, reply_markup=markup)
-    return ConversationHandler.END # Selection is handled by callback
+    # This menu itself doesn't change state, the button press does
+    return STATE_WAITING_FOR_FOLDER_SELECTION # Return state for ConversationHandler
 
+# *** Added await where needed ***
 async def client_show_folder_edit_options(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -1095,12 +1118,12 @@ async def client_show_folder_edit_options(update: Update, context: CallbackConte
     if not folder_id:
         log.error(f"Could not determine folder ID for edit options. User: {user_id}, Callback: {query.data if query else 'N/A'}")
         if query: await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-        return await client_folder_menu(update, context)
+        return await client_folder_menu(update, context) # await added
 
     folder_name = db.get_folder_name(folder_id)
     if not folder_name:
-        await query.answer(get_text(user_id, 'folder_not_found_error', lang=lang), show_alert=True)
-        return await client_folder_menu(update, context)
+        if query: await query.answer(get_text(user_id, 'folder_not_found_error', lang=lang), show_alert=True)
+        return await client_folder_menu(update, context) # await added
 
     # Store/update folder name in context
     context.user_data[CTX_FOLDER_NAME] = folder_name
@@ -1113,18 +1136,19 @@ async def client_show_folder_edit_options(update: Update, context: CallbackConte
         for group in groups_in_folder[:10]: # Show first 10 groups
             link = group['group_link']
             name = group['group_name'] or f"ID: {group['group_id']}" # Use ID if name missing
-            text += f"\n- <a href='{html.escape(link)}'>{html.escape(name)}</a>" if link else f"\n- {html.escape(name)}"
+            # Check if link is valid before making it clickable
+            escaped_link = html.escape(link or "")
+            escaped_name = html.escape(name)
+            text += f"\n- <a href='{escaped_link}'>{escaped_name}</a>" if link else f"\n- {escaped_name}"
         if len(groups_in_folder) > 10:
             text += f"\n... and {len(groups_in_folder) - 10} more."
     else:
         text += "\n" + get_text(user_id, 'folder_edit_no_groups', lang=lang)
 
     keyboard = [
-        # [InlineKeyboardButton(get_text(user_id, 'folder_edit_action_update', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}edit_update_prompt")], # Update (replace) seems complex, focusing on add/remove
         [InlineKeyboardButton(get_text(user_id, 'folder_edit_action_add', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}edit_add_prompt")],
         [InlineKeyboardButton(get_text(user_id, 'folder_edit_action_remove', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}edit_remove_select?page=0")],
         [InlineKeyboardButton(get_text(user_id, 'folder_edit_action_rename', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}edit_rename_prompt")],
-        # [InlineKeyboardButton(get_text(user_id, 'folder_edit_action_delete', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}delete_confirm")], # Delete is handled via main folder menu
         [InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}back_to_manage")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -1132,12 +1156,11 @@ async def client_show_folder_edit_options(update: Update, context: CallbackConte
     # This menu stays within the conversation, waiting for the next action
     return STATE_WAITING_FOR_FOLDER_ACTION
 
+# *** Added await where needed ***
 async def process_folder_links(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
     folder_id = context.user_data.get(CTX_FOLDER_ID)
     folder_name = context.user_data.get(CTX_FOLDER_NAME)
-    # Determine if adding or replacing (if replace is implemented later)
-    # action = context.user_data.get(CTX_FOLDER_ACTION, 'add') # Default to add
 
     if not folder_id or not folder_name:
         await reply_or_edit_text(update, context, get_text(user_id, 'session_expired', lang=lang))
@@ -1149,9 +1172,7 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
 
     if not raw_links:
         await reply_or_edit_text(update, context, get_text(user_id, 'join_no_links', lang=lang)) # Re-use join message
-        # Decide if we stay in state or go back
-        # Let's stay in state to allow user to paste correct links
-        return STATE_WAITING_FOR_GROUP_LINKS
+        return STATE_WAITING_FOR_GROUP_LINKS # Stay in state
 
     await reply_or_edit_text(update, context, get_text(user_id, 'folder_processing_links', lang=lang))
 
@@ -1192,9 +1213,9 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
             group_name = resolved.get('name')
             # If ID resolved, proceed to add
             if group_id:
-                 added = db.add_target_group(group_id, group_name, link, user_id, folder_id)
-                 if added is True: status_code = 'added'; added_count += 1
-                 elif added is False: status_code = 'ignored'; ignored_count += 1 # False from DB means duplicate ignored
+                 added_status = db.add_target_group(group_id, group_name, link, user_id, folder_id)
+                 if added_status is True: status_code = 'added'; added_count += 1
+                 elif added_status is False: status_code = 'ignored'; ignored_count += 1 # False from DB means duplicate ignored
                  else: status_code = 'failed'; reason = get_text(user_id, 'folder_add_db_error', lang=lang); failed_count += 1 # Should not happen often
             else:
                  # Resolved but no ID? Should not happen with current resolve_links_info
@@ -1221,7 +1242,8 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
             result_text += f"\n...and {len(results) - displayed_count} more."
             break
         status_key = f"folder_results_{res['status']}" # e.g., folder_results_added
-        status_text = get_text(user_id, status_key, lang=lang)
+        # Get base status text, provide default if key missing
+        status_text = get_text(user_id, status_key, lang=lang) if status_key in translations.get(lang, {}) else res['status']
         if res['status'] == 'failed' and res['reason']:
              status_text += f" ({html.escape(str(res['reason']))})" # Ensure reason is string
         # Escape the link itself before including it
@@ -1231,11 +1253,7 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
     # Go back to the folder edit menu
     await reply_or_edit_text(update, context, result_text, disable_web_page_preview=True)
     # After processing, return to the edit options menu for that folder
-    # We need to pass the folder_id back into the state or function call
-    # Option 1: Store folder_id in context (already done) and call function directly
-    # Option 2: Use a callback button
-    # Let's call the function directly. It will rebuild the menu.
-    return await client_show_folder_edit_options(update, context)
+    return await client_show_folder_edit_options(update, context) # await added
 
 
 async def client_select_groups_to_remove(update: Update, context: CallbackContext) -> int:
@@ -1246,7 +1264,7 @@ async def client_select_groups_to_remove(update: Update, context: CallbackContex
 
     if not folder_id or not folder_name:
         await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True)
-        return await client_folder_menu(update, context)
+        return await client_folder_menu(update, context) # await added
 
     try:
         _, params = query.data.split('?', 1)
@@ -1259,7 +1277,7 @@ async def client_select_groups_to_remove(update: Update, context: CallbackContex
     if not groups:
         await query.answer(get_text(user_id, 'folder_edit_no_groups', lang=lang), show_alert=True)
         # Go back to edit options if no groups to remove
-        return await client_show_folder_edit_options(update, context)
+        return await client_show_folder_edit_options(update, context) # await added
 
     # Get groups selected so far in this session
     selected_ids = set(context.user_data.get(CTX_TARGET_GROUP_IDS_TO_REMOVE, []))
@@ -1334,6 +1352,7 @@ async def client_toggle_group_for_removal(update: Update, context: CallbackConte
     # Need to call the function that builds the selection menu again
     # We need to simulate the original callback data for that page
     query.data = f"{CALLBACK_FOLDER_PREFIX}edit_remove_select?page={current_page}" # Modify query data
+    # await the call to the function that redraws the menu
     return await client_select_groups_to_remove(update, context)
 
 
@@ -1347,7 +1366,10 @@ async def client_confirm_remove_selected_groups(update: Update, context: Callbac
     if not folder_id or not folder_name or not ids_to_remove:
         await query.answer(get_text(user_id, 'folder_edit_remove_none_selected', lang=lang), show_alert=True)
         # Go back to selection state if nothing was selected somehow
-        return STATE_FOLDER_EDIT_REMOVE_SELECT
+        # Call the function that shows the selection menu
+        # Need to simulate the callback data
+        query.data = f"{CALLBACK_FOLDER_PREFIX}edit_remove_select?page=0" # Go to page 0
+        return await client_select_groups_to_remove(update, context) # await added
 
     removed_count = db.remove_target_groups_by_db_id(ids_to_remove, user_id)
 
@@ -1359,15 +1381,16 @@ async def client_confirm_remove_selected_groups(update: Update, context: Callbac
         )
         # Clear selection and return to folder edit options
         context.user_data.pop(CTX_TARGET_GROUP_IDS_TO_REMOVE, None)
-        return await client_show_folder_edit_options(update, context)
+        return await client_show_folder_edit_options(update, context) # await added
     else:
         db.log_event_db("Folder Group Remove Failed", f"Folder: {folder_name}({folder_id})", user_id=user_id)
         await reply_or_edit_text(update, context, get_text(user_id, 'folder_edit_remove_error', lang=lang))
         # Stay in selection state on error? Or go back? Let's go back to edit options.
         context.user_data.pop(CTX_TARGET_GROUP_IDS_TO_REMOVE, None)
-        return await client_show_folder_edit_options(update, context)
+        return await client_show_folder_edit_options(update, context) # await added
 
 
+# *** Added await where needed ***
 async def process_folder_rename(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
     new_name = update.message.text.strip()
@@ -1385,7 +1408,7 @@ async def process_folder_rename(update: Update, context: CallbackContext) -> int
 
     if new_name == current_name:
         # No change, just go back to edit menu
-        return await client_show_folder_edit_options(update, context)
+        return await client_show_folder_edit_options(update, context) # await added
 
     # Attempt rename using DB function
     success, reason = db.rename_folder(folder_id, user_id, new_name)
@@ -1398,7 +1421,7 @@ async def process_folder_rename(update: Update, context: CallbackContext) -> int
         )
         # Update context and return to edit menu
         context.user_data[CTX_FOLDER_NAME] = new_name
-        return await client_show_folder_edit_options(update, context)
+        return await client_show_folder_edit_options(update, context) # await added
     else:
         if reason == "name_exists":
              await reply_or_edit_text(update, context, get_text(user_id, 'folder_edit_rename_error_exists', lang=lang, new_name=html.escape(new_name)))
@@ -1407,9 +1430,10 @@ async def process_folder_rename(update: Update, context: CallbackContext) -> int
              db.log_event_db("Folder Rename Failed", f"ID: {folder_id}, To: {new_name}, Reason: {reason}", user_id=user_id)
              await reply_or_edit_text(update, context, get_text(user_id, 'folder_edit_rename_error_db', lang=lang))
              # Go back to edit menu even on failure
-             return await client_show_folder_edit_options(update, context)
+             return await client_show_folder_edit_options(update, context) # await added
 
 
+# *** Added await where needed ***
 async def client_confirm_folder_delete(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -1420,12 +1444,12 @@ async def client_confirm_folder_delete(update: Update, context: CallbackContext)
     except (ValueError, IndexError):
         log.error(f"Could not parse folder ID for delete confirm: {query.data}")
         await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-        return await client_folder_menu(update, context)
+        return await client_folder_menu(update, context) # await added
 
     folder_name = db.get_folder_name(folder_id)
     if not folder_name:
         await query.answer(get_text(user_id, 'folder_not_found_error', lang=lang), show_alert=True)
-        return await client_folder_menu(update, context)
+        return await client_folder_menu(update, context) # await added
 
     text = get_text(user_id, 'folder_delete_confirm', lang=lang, name=html.escape(folder_name))
     keyboard = [
@@ -1436,9 +1460,11 @@ async def client_confirm_folder_delete(update: Update, context: CallbackContext)
     ]
     markup = InlineKeyboardMarkup(keyboard)
     await reply_or_edit_text(update, context, text, reply_markup=markup)
-    return ConversationHandler.END # Confirmation buttons end the flow
+    # This doesn't change state, just shows confirmation. Callback handler routes the Yes/No press.
+    return STATE_WAITING_FOR_FOLDER_SELECTION # Return state to wait for Yes/No callback
 
 
+# *** Added await where needed ***
 async def client_delete_folder_confirmed(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -1448,7 +1474,7 @@ async def client_delete_folder_confirmed(update: Update, context: CallbackContex
     except (ValueError, IndexError):
         log.error(f"Could not parse folder ID for delete confirmed: {query.data}")
         await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-        return await client_folder_menu(update, context)
+        return await client_folder_menu(update, context) # await added
 
     folder_name = db.get_folder_name(folder_id) # Get name for logging before deleting
 
@@ -1461,10 +1487,11 @@ async def client_delete_folder_confirmed(update: Update, context: CallbackContex
         await reply_or_edit_text(update, context, get_text(user_id, 'folder_delete_error', lang=lang))
 
     # Return to the main folder menu after deletion attempt
-    return await client_folder_menu(update, context)
+    return await client_folder_menu(update, context) # await added
 
 
 # --- Join Groups Flow ---
+# *** Added await where needed ***
 async def client_select_bot_generic(update: Update, context: CallbackContext, action_prefix: str, next_state: str, title_key: str):
     """Generic function to select a bot for an action."""
     query = update.callback_query
@@ -1473,7 +1500,7 @@ async def client_select_bot_generic(update: Update, context: CallbackContext, ac
     user_bots = db.get_client_bots(user_id)
     if not user_bots:
         await query.answer(get_text(user_id, 'client_menu_no_userbots', lang=lang), show_alert=True)
-        return await client_menu(update, context)
+        return await client_menu(update, context) # await added
 
     keyboard = []
     text = get_text(user_id, title_key, lang=lang)
@@ -1520,6 +1547,7 @@ async def client_select_bot_generic(update: Update, context: CallbackContext, ac
     return STATE_WAITING_FOR_USERBOT_SELECTION
 
 
+# *** Added await where needed ***
 async def handle_userbot_selection(update: Update, context: CallbackContext, action_prefix: str, next_state: str) -> int:
     """Handles the callback after a user selects a bot (or 'all'/'active')."""
     query = update.callback_query
@@ -1533,13 +1561,13 @@ async def handle_userbot_selection(update: Update, context: CallbackContext, act
         selected_bots = db.get_client_bots(user_id)
         if not selected_bots: # Check if list is empty
              await query.answer(get_text(user_id, 'client_menu_no_userbots', lang=lang), show_alert=True)
-             return await client_menu(update, context)
+             return await client_menu(update, context) # await added
     elif selected_option == 'active':
          all_client_bots = db.get_client_bots(user_id)
          selected_bots = [p for p in all_client_bots if (b := db.find_userbot(p)) and b['status'] == 'active']
          if not selected_bots: # Check if list is empty
               await query.answer(get_text(user_id, 'join_no_active_bots', lang=lang), show_alert=True)
-              return await client_menu(update, context) # Go back to main menu
+              return await client_menu(update, context) # await added
     else: # Specific phone selected
         phone = selected_option
         bot_info = db.find_userbot(phone)
@@ -1562,6 +1590,7 @@ async def handle_userbot_selection(update: Update, context: CallbackContext, act
     elif action_prefix == CALLBACK_TASK_PREFIX:
         # Store the single selected bot for task setup
         context.user_data[CTX_TASK_PHONE] = selected_bots[0]
+        # await because task_show_settings_menu sends message
         return await task_show_settings_menu(update, context)
     # Add other actions like view_joined here if needed
     # elif action_prefix == CALLBACK_VIEW_JOINED_PREFIX:
@@ -1573,6 +1602,7 @@ async def handle_userbot_selection(update: Update, context: CallbackContext, act
         return ConversationHandler.END
 
 
+# *** Added await where needed ***
 async def process_join_group_links(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
     selected_bots = context.user_data.get(CTX_SELECTED_BOTS)
@@ -1708,6 +1738,7 @@ async def client_show_stats(update: Update, context: CallbackContext) -> int:
 
 
 # --- Task Setup ---
+# *** Added await where needed ***
 async def task_show_settings_menu(update: Update, context: CallbackContext) -> int:
     query = update.callback_query # Can be called initially or after setting something
     user_id, lang = get_user_id_and_lang(update, context)
@@ -1716,7 +1747,7 @@ async def task_show_settings_menu(update: Update, context: CallbackContext) -> i
     if not phone:
         log.error(f"Task setup called without phone in context for user {user_id}")
         if query: await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True)
-        return await client_menu(update, context) # Go back to main menu
+        return await client_menu(update, context) # await added
 
     bot_db_info = db.find_userbot(phone)
     display_name = html.escape(f"@{bot_db_info['username']}" if bot_db_info and bot_db_info['username'] else phone)
@@ -1825,6 +1856,7 @@ async def task_prompt_set_link(update: Update, context: CallbackContext, link_ty
     return next_state
 
 
+# *** Added await where needed ***
 async def process_task_link(update: Update, context: CallbackContext, link_type: str) -> int:
     """Processes the message link sent by the user."""
     user_id, lang = get_user_id_and_lang(update, context)
@@ -1843,7 +1875,7 @@ async def process_task_link(update: Update, context: CallbackContext, link_type:
         task_settings['fallback_message_link'] = None
         await reply_or_edit_text(update, context, get_text(user_id, 'task_set_skipped_fallback', lang=lang))
         # Return to task menu
-        return await task_show_settings_menu(update, context)
+        return await task_show_settings_menu(update, context) # await added
 
     # Validate the link format roughly
     link_parsed_type, _ = telethon_api.parse_telegram_url_simple(link_text)
@@ -1871,15 +1903,13 @@ async def process_task_link(update: Update, context: CallbackContext, link_type:
     if link_type == 'primary':
         task_settings['message_link'] = link_text
         await reply_or_edit_text(update, context, get_text(user_id, 'task_set_success_msg', lang=lang))
-        # Ask for fallback link next (commented out for simpler UI)
-        # return await task_prompt_set_link(update, context, 'fallback')
-        # Go back to menu instead
-        return await task_show_settings_menu(update, context)
+        # Go back to menu instead of asking fallback
+        return await task_show_settings_menu(update, context) # await added
     else: # Fallback
         task_settings['fallback_message_link'] = link_text
         await reply_or_edit_text(update, context, get_text(user_id, 'task_set_success_fallback', lang=lang))
         # Return to task menu
-        return await task_show_settings_menu(update, context)
+        return await task_show_settings_menu(update, context) # await added
 
 async def task_prompt_start_time(update: Update, context: CallbackContext) -> int:
      """Asks user for start time."""
@@ -1893,6 +1923,7 @@ async def task_prompt_start_time(update: Update, context: CallbackContext) -> in
      await reply_or_edit_text(update, context, text, reply_markup=markup)
      return STATE_WAITING_FOR_START_TIME
 
+# *** Added await where needed ***
 async def process_task_start_time(update: Update, context: CallbackContext) -> int:
     """Processes the start time HH:MM input."""
     user_id, lang = get_user_id_and_lang(update, context)
@@ -1933,7 +1964,7 @@ async def process_task_start_time(update: Update, context: CallbackContext) -> i
             get_text(user_id, 'task_set_success_time', lang=lang, time=time_str)
         )
         # Return to task menu
-        return await task_show_settings_menu(update, context)
+        return await task_show_settings_menu(update, context) # await added
 
     except (ValueError, TypeError):
         await reply_or_edit_text(update, context, get_text(user_id, 'task_error_invalid_time', lang=lang))
@@ -1973,6 +2004,7 @@ async def task_select_interval(update: Update, context: CallbackContext) -> int:
     return STATE_TASK_SETUP
 
 
+# *** Added await where needed ***
 async def process_interval_callback(update: Update, context: CallbackContext) -> int:
     """Handles interval selection callback."""
     query = update.callback_query
@@ -1981,7 +2013,7 @@ async def process_interval_callback(update: Update, context: CallbackContext) ->
 
     if task_settings is None:
         await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True)
-        return await client_menu(update, context)
+        return await client_menu(update, context) # await added
 
     try:
         interval_minutes = int(query.data.split(CALLBACK_INTERVAL_PREFIX)[1])
@@ -2000,11 +2032,11 @@ async def process_interval_callback(update: Update, context: CallbackContext) ->
     else: interval_str = f"{interval_minutes // 60} h"
     display_value = get_text(user_id, 'task_interval_button', lang=lang, value=interval_str)
 
-    # No need for separate success message, just update menu
+    # Don't show separate message, just update menu
     # await reply_or_edit_text(update, context, get_text(user_id, 'task_set_success_interval', lang=lang, interval=display_value))
 
     # Return to task menu showing updated settings
-    return await task_show_settings_menu(update, context)
+    return await task_show_settings_menu(update, context) # await added
 
 
 async def task_select_target_type(update: Update, context: CallbackContext) -> int:
@@ -2022,6 +2054,7 @@ async def task_select_target_type(update: Update, context: CallbackContext) -> i
     return STATE_TASK_SETUP # Selection handled by callbacks
 
 
+# *** Added await where needed ***
 async def task_select_folder_for_target(update: Update, context: CallbackContext) -> int:
     """Shows list of folders to select as target."""
     query = update.callback_query
@@ -2037,7 +2070,7 @@ async def task_select_folder_for_target(update: Update, context: CallbackContext
     if not folders:
         await query.answer(get_text(user_id, 'task_error_no_folders', lang=lang), show_alert=True)
         # Go back to target type selection if no folders exist
-        return await task_select_target_type(update, context)
+        return await task_select_target_type(update, context) # await added
 
     total_items = len(folders)
     start_index = current_page * ITEMS_PER_PAGE
@@ -2062,6 +2095,7 @@ async def task_select_folder_for_target(update: Update, context: CallbackContext
     return STATE_SELECT_TARGET_GROUPS # Specific state for selecting folder
 
 
+# *** Added await where needed ***
 async def task_set_target(update: Update, context: CallbackContext, target_type: str) -> int:
     """Sets the target type (all or specific folder)."""
     query = update.callback_query
@@ -2070,7 +2104,7 @@ async def task_set_target(update: Update, context: CallbackContext, target_type:
 
     if task_settings is None:
         await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True)
-        return await client_menu(update, context)
+        return await client_menu(update, context) # await added
 
     success_text = ""
     if target_type == 'all':
@@ -2100,11 +2134,11 @@ async def task_set_target(update: Update, context: CallbackContext, target_type:
         log.error(f"Invalid target_type '{target_type}' in task_set_target")
         return STATE_TASK_SETUP
 
-    # Don't send separate success message, just update the menu
+    # Don't send separate message, just update menu
     # await reply_or_edit_text(update, context, success_text)
 
     # Return to task menu to show updated settings
-    return await task_show_settings_menu(update, context)
+    return await task_show_settings_menu(update, context) # await added
 
 
 async def task_toggle_status(update: Update, context: CallbackContext) -> int:
@@ -2115,7 +2149,7 @@ async def task_toggle_status(update: Update, context: CallbackContext) -> int:
 
     if task_settings is None:
         await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True)
-        return await client_menu(update, context)
+        return await client_menu(update, context) # await added
 
     current_status = task_settings.get('status', 'inactive')
     new_status = 'inactive' if current_status == 'active' else 'active'
@@ -2141,12 +2175,13 @@ async def task_toggle_status(update: Update, context: CallbackContext) -> int:
     task_settings['status'] = new_status
     log.info(f"User {user_id} toggled task status to {new_status}.")
     status_text = get_text(user_id, f'task_status_{new_status}', lang=lang)
-    # await query.answer(get_text(user_id, 'task_status_toggled_success', lang=lang, status=status_text)) # Answer silently
+    await query.answer() # Answer silently
 
     # Update the menu display
-    return await task_show_settings_menu(update, context)
+    return await task_show_settings_menu(update, context) # await added
 
 
+# *** Added await where needed ***
 async def task_save_settings(update: Update, context: CallbackContext) -> int:
     """Saves the current task settings from context to the database."""
     query = update.callback_query
@@ -2156,7 +2191,7 @@ async def task_save_settings(update: Update, context: CallbackContext) -> int:
 
     if not phone or settings_to_save is None:
         await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True)
-        return await client_menu(update, context)
+        return await client_menu(update, context) # await added
 
     # Add validation before saving (especially if status is active)
     if settings_to_save.get('status') == 'active':
@@ -2186,7 +2221,7 @@ async def task_save_settings(update: Update, context: CallbackContext) -> int:
         await reply_or_edit_text(update, context, get_text(user_id, 'task_save_success', lang=lang, display_name=display_name))
         # Successfully saved, clear context and return to main client menu
         clear_conversation_data(context)
-        return await client_menu(update, context)
+        return await client_menu(update, context) # await added
     else:
         db.log_event_db("Task Save Failed", f"User: {user_id}, Bot: {phone}", user_id=user_id, userbot_phone=phone)
         await reply_or_edit_text(update, context, get_text(user_id, 'task_save_error', lang=lang))
@@ -2196,7 +2231,7 @@ async def task_save_settings(update: Update, context: CallbackContext) -> int:
 
 # Helper to build simple back button markup for task setup steps
 def task_back_button_markup(user_id, context):
-    lang = context.user_data.get(CTX_LANG, 'en')
+    lang = context.user_data.get(CTX_LANG, 'en') if context.user_data else 'en'
     return InlineKeyboardMarkup([[
         InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_task_menu")
     ]])
@@ -2204,7 +2239,7 @@ def task_back_button_markup(user_id, context):
 
 # --- Admin Userbot List/Remove/Log Views ---
 
-async def admin_list_userbots(update: Update, context: CallbackContext):
+async def admin_list_userbots(update: Update, context: CallbackContext) -> int: # Return state
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
     try:
@@ -2266,7 +2301,7 @@ async def admin_list_userbots(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 
-async def admin_select_userbot_to_remove(update: Update, context: CallbackContext):
+async def admin_select_userbot_to_remove(update: Update, context: CallbackContext) -> int: # Return state
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
     try:
@@ -2303,10 +2338,11 @@ async def admin_select_userbot_to_remove(update: Update, context: CallbackContex
     markup = InlineKeyboardMarkup(keyboard)
 
     await reply_or_edit_text(update, context, text, reply_markup=markup)
-    return ConversationHandler.END # Selection handled by callback
+    # This doesn't change state, callback routes the selection
+    return ConversationHandler.END
 
 
-async def admin_confirm_remove_userbot(update: Update, context: CallbackContext):
+async def admin_confirm_remove_userbot(update: Update, context: CallbackContext) -> int: # Return state
      """Sends the confirmation message before actually removing."""
      query = update.callback_query
      user_id, lang = get_user_id_and_lang(update, context)
@@ -2315,12 +2351,12 @@ async def admin_confirm_remove_userbot(update: Update, context: CallbackContext)
      except IndexError:
          log.error(f"Could not parse phone from remove confirm callback: {query.data}")
          await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-         return await admin_command(update, context) # Go back to admin menu
+         return await admin_command(update, context) # await added
 
      bot_info = db.find_userbot(phone_to_remove)
      if not bot_info:
           await query.answer(get_text(user_id, 'admin_userbot_not_found', lang=lang), show_alert=True) # Need key
-          return await admin_command(update, context)
+          return await admin_command(update, context) # await added
 
      username = bot_info['username']
      display_name = html.escape(f"@{username}" if username else phone_to_remove)
@@ -2332,10 +2368,11 @@ async def admin_confirm_remove_userbot(update: Update, context: CallbackContext)
      ]]
      markup = InlineKeyboardMarkup(keyboard)
      await reply_or_edit_text(update, context, text, reply_markup=markup)
+     # No state change here, waiting for Yes/No callback
      return ConversationHandler.END
 
 
-async def admin_remove_userbot_confirmed(update: Update, context: CallbackContext):
+async def admin_remove_userbot_confirmed(update: Update, context: CallbackContext) -> int: # Return state
     """Actually removes the userbot after confirmation."""
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -2344,7 +2381,7 @@ async def admin_remove_userbot_confirmed(update: Update, context: CallbackContex
     except IndexError:
         log.error(f"Could not parse phone from remove confirmed callback: {query.data}")
         await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-        return await admin_command(update, context)
+        return await admin_command(update, context) # await added
 
     bot_info = db.find_userbot(phone_to_remove) # Get info for display before removing
     display_name = "N/A"
@@ -2366,10 +2403,10 @@ async def admin_remove_userbot_confirmed(update: Update, context: CallbackContex
         await reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_remove_error', lang=lang))
 
     # Return to admin menu
-    return await admin_command(update, context)
+    return await admin_command(update, context) # await added
 
 
-async def admin_view_subscriptions(update: Update, context: CallbackContext):
+async def admin_view_subscriptions(update: Update, context: CallbackContext) -> int: # Return state
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
     try:
@@ -2426,7 +2463,7 @@ async def admin_view_subscriptions(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 
-async def admin_view_system_logs(update: Update, context: CallbackContext):
+async def admin_view_system_logs(update: Update, context: CallbackContext) -> int: # Return state
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
     limit = 25 # How many logs to show per view
@@ -2479,6 +2516,7 @@ async def admin_view_system_logs(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 # --- Callback Routers ---
+# *** Added await where needed ***
 async def handle_client_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -2497,23 +2535,23 @@ async def handle_client_callback(update: Update, context: CallbackContext) -> st
     log.debug(f"Client Callback Route: Action='{action}', Data='{data}'")
 
     if action == "select_bot_task":
-        return await client_select_bot_generic(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP, 'task_select_userbot')
+        return await client_select_bot_generic(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP, 'task_select_userbot') # await added
     elif action == "manage_folders":
-        return await client_folder_menu(update, context)
+        return await client_folder_menu(update, context) # await added
     elif action == "select_bot_join":
-        return await client_select_bot_generic(update, context, CALLBACK_JOIN_PREFIX, STATE_WAITING_FOR_GROUP_LINKS, 'join_select_userbot')
+        return await client_select_bot_generic(update, context, CALLBACK_JOIN_PREFIX, STATE_WAITING_FOR_GROUP_LINKS, 'join_select_userbot') # await added
     # elif action == "select_bot_view_joined": # Removed feature
-    #    return await client_select_bot_generic(update, context, CALLBACK_VIEW_JOINED_PREFIX, STATE_WAITING_FOR_USERBOT_SELECTION, 'view_joined_select_bot')
+    #    return await client_select_bot_generic(update, context, CALLBACK_VIEW_JOINED_PREFIX, STATE_WAITING_FOR_USERBOT_SELECTION, 'view_joined_select_bot') # await added
     elif action == "view_stats":
-         return await client_show_stats(update, context)
+         return await client_show_stats(update, context) # await added
     elif action == "language":
-        return await client_ask_select_language(update, context)
+        return await client_ask_select_language(update, context) # await added
     elif action == "back_to_menu":
         clear_conversation_data(context) # Clear state before showing menu
-        return await client_menu(update, context)
+        return await client_menu(update, context) # await added
     # Add specific handlers for view_joined if re-enabled
     # elif action.startswith("view_joined_"):
-    #    return await client_view_joined_groups(update, context)
+    #    return await client_view_joined_groups(update, context) # await added
     else:
         log.warning(f"Unhandled CLIENT CB: Action='{action}', Data='{data}'")
         await query.answer("Action not recognized.", show_alert=True) # Generic feedback
@@ -2521,6 +2559,7 @@ async def handle_client_callback(update: Update, context: CallbackContext) -> st
     return None # Return None or END state if action handled without state change
 
 
+# *** Added await where needed ***
 async def handle_admin_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -2541,14 +2580,14 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> str
         await reply_or_edit_text(update, context, get_text(user_id, 'admin_userbot_prompt_phone', lang=lang))
         return STATE_WAITING_FOR_PHONE
     elif action == "remove_bot_select":
-        return await admin_select_userbot_to_remove(update, context)
+        return await admin_select_userbot_to_remove(update, context) # await added
     elif action == "list_bots":
-        return await admin_list_userbots(update, context)
+        return await admin_list_userbots(update, context) # await added
     elif action == "gen_invite_prompt":
         await reply_or_edit_text(update, context, get_text(user_id, 'admin_invite_prompt_details', lang=lang))
         return STATE_WAITING_FOR_SUB_DETAILS
     elif action == "view_subs":
-        return await admin_view_subscriptions(update, context)
+        return await admin_view_subscriptions(update, context) # await added
     elif action == "extend_sub_prompt":
         await reply_or_edit_text(update, context, get_text(user_id, 'admin_extend_prompt_code', lang=lang))
         return STATE_WAITING_FOR_EXTEND_CODE
@@ -2556,14 +2595,14 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> str
         await reply_or_edit_text(update, context, get_text(user_id, 'admin_assignbots_prompt_code', lang=lang))
         return STATE_WAITING_FOR_ADD_USERBOTS_CODE
     elif action == "view_logs":
-        return await admin_view_system_logs(update, context)
+        return await admin_view_system_logs(update, context) # await added
     elif action == "remove_bot_confirm": # Route based on stripped action
-         return await admin_confirm_remove_userbot(update, context)
+         return await admin_confirm_remove_userbot(update, context) # await added
     elif action == "remove_bot_confirmed": # Route based on stripped action
-         return await admin_remove_userbot_confirmed(update, context)
+         return await admin_remove_userbot_confirmed(update, context) # await added
     elif action == "back_to_menu":
          clear_conversation_data(context)
-         return await admin_command(update, context)
+         return await admin_command(update, context) # await added
     else:
         log.warning(f"Unhandled ADMIN CB: Action='{action}', Data='{data}'")
         await query.answer("Action not recognized.", show_alert=True) # Generic feedback
@@ -2571,6 +2610,7 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> str
     return None
 
 
+# *** Added await where needed ***
 async def handle_folder_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -2582,36 +2622,36 @@ async def handle_folder_callback(update: Update, context: CallbackContext) -> st
         await reply_or_edit_text(update, context, get_text(user_id, 'folder_create_prompt', lang=lang))
         return STATE_WAITING_FOR_FOLDER_NAME
     elif action == "select_edit":
-        return await client_select_folder_to_edit_or_delete(update, context, 'edit')
+        return await client_select_folder_to_edit_or_delete(update, context, 'edit') # await added
     elif action == "select_delete":
-        return await client_select_folder_to_edit_or_delete(update, context, 'delete')
+        return await client_select_folder_to_edit_or_delete(update, context, 'delete') # await added
     elif action == "edit_selected":
-        return await client_show_folder_edit_options(update, context)
+        return await client_show_folder_edit_options(update, context) # await added
     elif action == "delete_selected": # Renamed from delete_confirm
-         return await client_confirm_folder_delete(update, context)
+         return await client_confirm_folder_delete(update, context) # await added
     elif action == "delete_confirmed":
-         return await client_delete_folder_confirmed(update, context)
+         return await client_delete_folder_confirmed(update, context) # await added
     elif action == "back_to_manage":
         clear_conversation_data(context) # Clear folder context
-        return await client_folder_menu(update, context)
+        return await client_folder_menu(update, context) # await added
     # --- Edit Options ---
     elif action == "edit_add_prompt":
          folder_name = context.user_data.get(CTX_FOLDER_NAME, "this folder")
          await reply_or_edit_text(update, context, get_text(user_id, 'folder_edit_add_prompt', lang=lang, name=html.escape(folder_name)))
          return STATE_WAITING_FOR_GROUP_LINKS # Use the same state as joining
     elif action == "edit_remove_select":
-         return await client_select_groups_to_remove(update, context)
+         return await client_select_groups_to_remove(update, context) # await added
     elif action == "edit_toggle_remove": # Handles the toggle action
-         return await client_toggle_group_for_removal(update, context)
+         return await client_toggle_group_for_removal(update, context) # await added
     elif action == "edit_remove_confirm": # Handles the confirmation button press
-         return await client_confirm_remove_selected_groups(update, context)
+         return await client_confirm_remove_selected_groups(update, context) # await added
     elif action == "edit_rename_prompt":
          current_name = context.user_data.get(CTX_FOLDER_NAME, "this folder")
          await reply_or_edit_text(update, context, get_text(user_id, 'folder_edit_rename_prompt', lang=lang, current_name=html.escape(current_name)))
          return STATE_FOLDER_RENAME_PROMPT
     elif action == "back_to_edit_options":
         # Go back to the main edit options for the current folder
-        return await client_show_folder_edit_options(update, context)
+        return await client_show_folder_edit_options(update, context) # await added
     else:
         log.warning(f"Unhandled FOLDER CB: Action='{action}', Data='{data}'")
         await query.answer("Action not recognized.", show_alert=True)
@@ -2619,6 +2659,7 @@ async def handle_folder_callback(update: Update, context: CallbackContext) -> st
     return None
 
 
+# *** Added await where needed ***
 async def handle_task_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -2628,37 +2669,38 @@ async def handle_task_callback(update: Update, context: CallbackContext) -> str 
 
     # --- Bot Selection ---
     if action.startswith("select_"): # Catches select_<phone>
+        # handle_userbot_selection calls other async functions, needs await
         return await handle_userbot_selection(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP)
     elif action == "back_to_bot_select":
          clear_conversation_data(context)
          # Re-call the function to show bot selection
-         return await client_select_bot_generic(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP, 'task_select_userbot')
+         return await client_select_bot_generic(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP, 'task_select_userbot') # await added
 
     # --- Inside Task Setup Menu ---
     elif action == "back_to_task_menu":
          # Should only be called from sub-prompts like setting link/time/interval
-         return await task_show_settings_menu(update, context)
+         return await task_show_settings_menu(update, context) # await added
     elif action == "set_primary_link":
-         return await task_prompt_set_link(update, context, 'primary')
+         return await task_prompt_set_link(update, context, 'primary') # await added
     # Fallback link setting is started after primary link is set
     elif action == "set_time":
-         return await task_prompt_start_time(update, context)
+         return await task_prompt_start_time(update, context) # await added
     elif action == "set_interval":
-         return await task_select_interval(update, context)
+         return await task_select_interval(update, context) # await added
     elif action == "set_target_type":
-         return await task_select_target_type(update, context)
+         return await task_select_target_type(update, context) # await added
     elif action == "select_folder_target": # Comes from target type selection
-         return await task_select_folder_for_target(update, context)
+         return await task_select_folder_for_target(update, context) # await added
     elif action == "set_target_all": # Comes from target type selection
-         return await task_set_target(update, context, 'all')
+         return await task_set_target(update, context, 'all') # await added
     elif action == "set_target_folder": # Comes from folder selection
-         return await task_set_target(update, context, 'folder')
+         return await task_set_target(update, context, 'folder') # await added
     elif action == "back_to_target_type": # Back button from folder selection
-         return await task_select_target_type(update, context)
+         return await task_select_target_type(update, context) # await added
     elif action == "toggle_status":
-         return await task_toggle_status(update, context)
+         return await task_toggle_status(update, context) # await added
     elif action == "save":
-         return await task_save_settings(update, context)
+         return await task_save_settings(update, context) # await added
     else:
         log.warning(f"Unhandled TASK CB: Action='{action}', Data='{data}'")
         await query.answer("Action not recognized.", show_alert=True)
@@ -2666,6 +2708,7 @@ async def handle_task_callback(update: Update, context: CallbackContext) -> str 
     return None
 
 
+# *** Added await where needed ***
 async def handle_join_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -2673,24 +2716,26 @@ async def handle_join_callback(update: Update, context: CallbackContext) -> str 
     log.debug(f"Join Callback Route: Data='{data}'")
 
     if data.startswith(CALLBACK_JOIN_PREFIX + "select_"):
-        return await handle_userbot_selection(update, context, CALLBACK_JOIN_PREFIX, STATE_WAITING_FOR_GROUP_LINKS)
+        return await handle_userbot_selection(update, context, CALLBACK_JOIN_PREFIX, STATE_WAITING_FOR_GROUP_LINKS) # await added
     else:
         log.warning(f"Unhandled JOIN CB: Data='{data}'")
         await query.answer("Action not recognized.", show_alert=True)
     return None
 
+# *** Added await where needed ***
 async def handle_language_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
     data = query.data
     log.debug(f"Language Callback Route: Data='{data}'")
 
     if data.startswith(CALLBACK_LANG_PREFIX):
-        return await set_language_handler(update, context)
+        return await set_language_handler(update, context) # await added
     else:
         log.warning(f"Unhandled LANG CB: Data='{data}'")
         await query.answer("Action not recognized.", show_alert=True)
     return None
 
+# *** Added await where needed ***
 async def handle_interval_callback(update: Update, context: CallbackContext) -> str | int | None:
      """Handles interval button presses."""
      query = update.callback_query
@@ -2699,13 +2744,14 @@ async def handle_interval_callback(update: Update, context: CallbackContext) -> 
      log.debug(f"Interval Callback Route: Data='{data}'")
 
      if data.startswith(CALLBACK_INTERVAL_PREFIX):
-         return await process_interval_callback(update, context) # Call the specific handler
+         return await process_interval_callback(update, context) # await added
      else:
          log.warning(f"Unhandled INTERVAL CB: Data='{data}'")
          await query.answer("Action not recognized.", show_alert=True)
      return None
 
 
+# *** Added await where needed ***
 async def handle_generic_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
     user_id, lang = get_user_id_and_lang(update, context)
@@ -2724,11 +2770,11 @@ async def handle_generic_callback(update: Update, context: CallbackContext) -> s
         clear_conversation_data(context)
         # Try to determine context: If admin, go to admin menu, else client menu
         if is_admin(user_id):
-            return await admin_command(update, context)
+            return await admin_command(update, context) # await added
         else:
              # Check if user is a valid client before showing client menu
              client_info = db.find_client_by_user_id(user_id)
-             if client_info: return await client_menu(update, context)
+             if client_info: return await client_menu(update, context) # await added
              else: return ConversationHandler.END # End if not identifiable
     elif action == "noop": # No operation button (like page number indicator)
          await query.answer() # Just acknowledge the press
@@ -2752,13 +2798,8 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
     log.info(f"CB Route: User={user_id}, Data='{data}'")
     next_state = None
 
-    # Answer immediately (unless specific handlers need to answer with alert)
-    # Defer answering for confirmation buttons or potentially slow actions
-    # if not ("confirm" in data or "delete" in data or "save" in data or "toggle" in data):
-    #     try: await query.answer()
-    #     except Exception as e: log.debug(f"Ignoring answer error: {e}")
-    # Let specific handlers answer unless it's a simple navigation/display update
-
+    # Defer answering callback query until the handler function is done or needs specific answer
+    # query.answer() # Removed immediate answer
 
     # Route based on prefix
     try:
@@ -2783,8 +2824,8 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
             await query.answer("Unknown button pressed.", show_alert=True)
             next_state = ConversationHandler.END # End conversation for unknown buttons
 
-        # Default answer if handler didn't answer and it wasn't noop
-        if query and hasattr(query, 'answer') and not query.answered and CALLBACK_GENERIC_PREFIX+"noop" not in data:
+        # Default answer if handler finished without error and didn't explicitly answer
+        if query and hasattr(query, 'answer') and not query.answered and next_state is not None: # Answer only if handler returned a state or END
              try: await query.answer()
              except Exception: pass
 
@@ -2801,81 +2842,56 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
 
 
 # --- Conversation Handler Definition ---
-# Combine states logically
-admin_auth_states = {
-    STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_phone)],
-    STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_id)],
-    STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash)],
-    STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_code)],
-    STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_password)],
-}
+# All handlers defined above are now async def
 
-admin_manage_states = {
-    STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_invite_details)],
-    STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_code)],
-    STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_days)],
-    STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_code)],
-    STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_count)],
-}
-
-client_folder_states = {
-    STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_name)],
-    STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)], # Handles button presses within edit menu
-    STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename)],
-    STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)], # Handles selecting groups to remove
-    STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_links)], # Used for adding links to folder AND joining groups
-}
-
-client_task_states = {
-     STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)], # Main menu for task settings
-     STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'primary'))],
-     STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'fallback'))],
-     STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_start_time)],
-     STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler)], # Selecting folder as target
-}
-
-# --- Main Conversation Handler ---
 main_conversation = ConversationHandler(
     entry_points=[
         CommandHandler('start', start_command, filters=Filters.chat_type.private),
         CommandHandler('admin', admin_command, filters=Filters.chat_type.private),
-        # Add other top-level commands if needed
-        # General callback handler for buttons pressed when not in a specific state (e.g., main menu buttons)
-        CallbackQueryHandler(main_callback_handler)
+        CallbackQueryHandler(main_callback_handler) # Handles callbacks outside states
     ],
     states={
         STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_invitation_code)],
 
         # Admin States
-        **admin_auth_states,
-        **admin_manage_states,
+        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_phone)],
+        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_id)],
+        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash)],
+        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_code)],
+        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_password)],
+        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_invite_details)],
+        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_code)],
+        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_days)],
+        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_code)],
+        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_count)],
 
-        # Client States (Folder, Task, Join)
-        **client_folder_states, # Includes waiting for group links for folders and join
-        **client_task_states,
+        # Client Folder States
+        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_name)],
+        STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
+        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename)],
+        STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
+        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_join_group_links)], # Note: Also used by folder add link processing, context determines behavior
+        STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)], # State for selecting folder to edit/delete
 
-        # State for Bot Selection (used by multiple flows)
+        # Client Task States
+        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
+        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'primary'))],
+        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'fallback'))],
+        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_start_time)],
+        STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler)],
+
+        # Generic State for selecting userbot
         STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-
-        # Other specific states if needed
-        # STATE_WAITING_FOR_LANGUAGE: [CallbackQueryHandler(main_callback_handler)], # Language handled by direct callback
 
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private),
         CommandHandler('start', start_command, filters=Filters.chat_type.private), # Allow restarting
         CommandHandler('admin', admin_command, filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)), # Allow admin cmd
-        # Fallback handles unexpected messages/commands within a state
-        MessageHandler(Filters.all & Filters.chat_type.private, conversation_fallback),
-        # CallbackQueryHandler to catch buttons that might not match the current state logic
-        CallbackQueryHandler(main_callback_handler)
+        MessageHandler(Filters.all & Filters.chat_type.private, conversation_fallback), # Fallback for unexpected text
+        CallbackQueryHandler(main_callback_handler) # Fallback for unexpected callbacks
     ],
-    allow_reentry=True, # Allow entering the conversation again via entry points
-    # Optional: Define conversation timeouts
-    # conversation_timeout=timedelta(minutes=15).total_seconds(),
-    # per_user=True,
-    # per_chat=True, # Keep state separate per user in private chat
-    # per_message=False,
+    allow_reentry=True,
 )
 
 log.info("Handlers module loaded with implemented functions.")
