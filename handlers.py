@@ -532,7 +532,9 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
                  elif added_status is False: status_code = 'ignored'; ignored_count += 1
                  else: status_code = 'failed'; reason = get_text(user_id, 'folder_add_db_error', lang=lang); failed_count += 1
             else:
-                 status_code = 'failed'; reason = get_text(user_id, 'folder_resolve_error', lang=lang) + " (No ID)"; failed_count += 1
+                 status_code = 'failed'
+                 reason = get_text(user_id, 'folder_resolve_error', lang=lang) + " (No ID)"
+                 failed_count += 1
         elif resolved and resolved.get('error'): status_code = 'failed'; reason = resolved.get('error'); failed_count += 1
         else: status_code = 'failed'; reason = get_text(user_id, 'folder_resolve_error', lang=lang); failed_count += 1
         results[link] = {'status': status_code, 'reason': reason}
@@ -773,7 +775,6 @@ async def process_task_link(update: Update, context: CallbackContext, link_type:
         await _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang)) # Generic error
         return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
 
-
 async def task_prompt_start_time(update: Update, context: CallbackContext) -> int:
      query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); local_tz_name = LITHUANIA_TZ.zone if hasattr(LITHUANIA_TZ, 'zone') else 'Europe/Vilnius'; text = get_text(user_id, 'task_prompt_start_time', lang=lang, timezone_name=local_tz_name); keyboard = [[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_task_menu")]]; markup = InlineKeyboardMarkup(keyboard); await _send_or_edit_message(update, context, text, reply_markup=markup); return STATE_WAITING_FOR_START_TIME
 
@@ -942,9 +943,7 @@ async def admin_view_subscriptions(update: Update, context: CallbackContext) -> 
                  user_link = f"<a href='tg://user?id={client_user_id}'>{client_user_id}</a>"
              except Exception as e:
                  log.debug(f"Could not create user link for {client_user_id}: {e}")
-                 # Keep the default user_link ("ID: `...`") if try fails
-                 # pass # Default is already set above
-                 user_link = f"ID: `{client_user_id}` (Link Error)" # Or indicate error
+                 user_link = f"ID: `{client_user_id}` (Link Error)" # Indicate error
         # *** END CORRECTION ***
         end_date = format_dt(sub['subscription_end']); code = sub['invitation_code']; bot_count = sub['bot_count']
         text += get_text(user_id, 'admin_subs_line', lang=lang, user_link=user_link, code=html.escape(code), end_date=end_date, bot_count=bot_count) + "\n\n"
@@ -1065,15 +1064,26 @@ async def handle_interval_callback(update: Update, context: CallbackContext) -> 
 async def handle_generic_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; action = data.split(CALLBACK_GENERIC_PREFIX)[1] if CALLBACK_GENERIC_PREFIX in data else None; log.debug(f"Generic Callback Route: Action='{action}', Data='{data}'")
     if action == "cancel": await _send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
-    elif action == "confirm_no": await _send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang=lang)); clear_conversation_data(context);
-    if is_admin(user_id): return await admin_command(update, context)
-    else: client_info = db.find_client_by_user_id(user_id);
-    if client_info: return await client_menu(update, context)
-    else: return ConversationHandler.END
+    elif action == "confirm_no":
+        await _send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang=lang))
+        clear_conversation_data(context)
+        # *** CORRECTED INDENTATION/LOGIC HERE ***
+        if is_admin(user_id):
+            return await admin_command(update, context)
+        else:
+             client_info = db.find_client_by_user_id(user_id)
+             if client_info:
+                 return await client_menu(update, context)
+             else:
+                 # Not admin and not a known client, just end
+                 return ConversationHandler.END
     elif action == "noop":
-        if query and hasattr(query,'answer') and not query.answered: await query.answer(); return None
-    else: log.warning(f"Unhandled GENERIC CB: Action='{action}', Data='{data}'");
-    if query and hasattr(query,'answer') and not query.answered: await query.answer("Action not recognized.", show_alert=True)
+        # Answer silently and stay in the same state
+        if query and hasattr(query,'answer') and not query.answered: await query.answer()
+        return None # Explicitly return None for noop
+    else:
+        log.warning(f"Unhandled GENERIC CB: Action='{action}', Data='{data}'");
+        if query and hasattr(query,'answer') and not query.answered: await query.answer("Action not recognized.", show_alert=True)
     return None
 
 # --- Main Callback Router ---
@@ -1153,4 +1163,3 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded with implemented functions.")
-# --- END OF FILE handlers.py ---
