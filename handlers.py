@@ -339,7 +339,7 @@ async def process_admin_api_id(update: Update, context: CallbackContext) -> str 
     user_id, lang = get_user_id_and_lang(update, context); api_id_str = update.message.text.strip()
     try:
         api_id = int(api_id_str)
-        if api_id <= 0: # Check positivity
+        if api_id <= 0:
             raise ValueError("API ID must be positive")
         context.user_data[CTX_API_ID] = api_id
         log.info(f"Admin {user_id} API ID OK for {context.user_data.get(CTX_PHONE)}")
@@ -428,7 +428,7 @@ async def process_admin_invite_details(update: Update, context: CallbackContext)
         bots_needed = int(match.group(2))
         if days <= 0 or bots_needed <= 0:
             raise ValueError("Days and bots must be positive")
-    except (ValueError, AssertionError):
+    except (ValueError, AssertionError): # Catch the raised ValueError here
         await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_numbers', lang=lang))
         return STATE_WAITING_FOR_SUB_DETAILS
     await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_generating', lang=lang)); code = str(uuid.uuid4().hex)[:8]
@@ -450,7 +450,7 @@ async def process_admin_extend_days(update: Update, context: CallbackContext) ->
         days_to_add = int(days_str)
         if days_to_add <= 0:
             raise ValueError("Days must be positive")
-    except (ValueError, AssertionError):
+    except (ValueError, AssertionError): # Catch the raised ValueError here
         await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_days', lang=lang))
         return STATE_WAITING_FOR_EXTEND_DAYS
     client = db.find_client_by_code(code)
@@ -474,8 +474,9 @@ async def process_admin_add_bots_count(update: Update, context: CallbackContext)
         count_to_add = int(count_str)
         if count_to_add <= 0:
             raise ValueError("Count must be positive")
-    except (ValueError, AssertionError):
-        await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_invalid_count', lang=lang)); return STATE_WAITING_FOR_ADD_USERBOTS_COUNT
+    except (ValueError, AssertionError): # Catch the raised ValueError here
+        await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_invalid_count', lang=lang))
+        return STATE_WAITING_FOR_ADD_USERBOTS_COUNT
     available_bots = db.get_unassigned_userbots(limit=count_to_add)
     if len(available_bots) < count_to_add: await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_no_bots_available', lang=lang, needed=count_to_add, available=len(available_bots))); return STATE_WAITING_FOR_ADD_USERBOTS_COUNT
     success, message = db.assign_userbots_to_client(code, available_bots)
@@ -517,7 +518,7 @@ async def client_select_folder_to_edit_or_delete(update: Update, context: Callba
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context);
     try:
         current_page = 0
-        if '?' in query.data: # Check if query params exist
+        if '?' in query.data:
             _, page_data = query.data.split('?', 1)
             current_page = int(page_data.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
@@ -538,10 +539,10 @@ async def client_show_folder_edit_options(update: Update, context: CallbackConte
     if not folder_id and query and '?' in query.data:
          try: _, params = query.data.split('?', 1); folder_id = int(params.split('=')[1]); context.user_data[CTX_FOLDER_ID] = folder_id
          except (ValueError, IndexError): folder_id = None
-    if not folder_id: log.error(f"Could not determine folder ID for edit options. User: {user_id}, Callback: {query.data if query else 'N/A'}");
-    # This check was problematic, if query is None, it would fail.
-    # The actual error handling for missing folder_id is better done after trying to get folder_name
-    # if query and hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True); return await client_folder_menu(update, context)
+    if not folder_id:
+        log.error(f"Could not determine folder ID for edit options. User: {user_id}, Callback: {query.data if query else 'N/A'}")
+        if query and hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+        return await client_folder_menu(update, context)
     folder_name = db.get_folder_name(folder_id)
     if not folder_name:
         if query and hasattr(query, 'answer'): await query.answer(get_text(user_id, 'folder_not_found_error', lang=lang), show_alert=True)
@@ -745,10 +746,15 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
             else: current_part += line
         parts.append(current_part)
         for i, part in enumerate(parts):
-            part_markup = markup if i == len(parts) - 1 else None;
-            try: await context.bot.send_message(user_id, part, parse_mode=ParseMode.HTML, reply_markup=part_markup, disable_web_page_preview=True);
-            if i < len(parts) - 1: await asyncio.sleep(0.5)
-            except Exception as send_e: log.error(f"Error sending split join results part {i+1}: {send_e}"); break
+            part_markup = markup if i == len(parts) - 1 else None
+            try:
+                await context.bot.send_message(user_id, part, parse_mode=ParseMode.HTML, reply_markup=part_markup, disable_web_page_preview=True)
+                # The problematic 'if' statement was here
+                if i < len(parts) - 1: # Correctly indented under the try
+                    await asyncio.sleep(0.5)
+            except Exception as send_e:
+                log.error(f"Error sending split join results part {i+1}: {send_e}")
+                break # Stop sending further parts on error
     else: await _send_or_edit_message(update, context, all_results_text, reply_markup=markup, disable_web_page_preview=True)
     clear_conversation_data(context); return ConversationHandler.END
 
@@ -1242,4 +1248,3 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded with corrected sync/async definitions.")
-# --- END OF FILE handlers.py ---
