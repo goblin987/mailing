@@ -577,21 +577,46 @@ async def process_admin_userbot_password(update: Update, context: CallbackContex
     except Exception as e: log.error(f"Exception during complete_authentication_flow (password) for {phone}: {e}", exc_info=True); context.user_data.pop(CTX_AUTH_DATA, None); await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=html.escape(phone), error=html.escape(str(e)))); clear_conversation_data(context); return ConversationHandler.END
 
 async def process_admin_invite_details(update: Update, context: CallbackContext) -> int:
-    user_id, lang = get_user_id_and_lang(update, context); details_text = update.message.text.strip().lower(); match = re.match(r'(\d+)\s*d\s+(\d+)\s*b', details_text)
-    if not match: await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_format', lang=lang)); return STATE_WAITING_FOR_SUB_DETAILS
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+
     try:
-        days = int(match.group(1))
-        bots_needed = int(match.group(2))
-        if days <= 0 or bots_needed <= 0:
-            raise ValueError("Days and bots must be positive")
-    except (ValueError, AssertionError):
-        await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_numbers', lang=lang))
+        # Parse subscription details (days)
+        days = int(update.message.text.strip())
+        if days <= 0:
+            _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_days', lang=lang))
+            return STATE_WAITING_FOR_SUB_DETAILS
+
+        # Generate a unique invite code
+        invite_code = db.generate_invite_code()
+        if not invite_code:
+            _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang))
+            return ConversationHandler.END
+
+        # Store the invite code with subscription duration
+        if not db.store_invite_code(invite_code, days):
+            _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang))
+            return ConversationHandler.END
+
+        # Send success message with the generated code
+        _send_or_edit_message(
+            update, 
+            context, 
+            get_text(user_id, 'admin_invite_generated', lang=lang, code=invite_code, days=days)
+        )
+        
+        # Return to admin menu
+        return admin_command(update, context)
+
+    except ValueError:
+        _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_days', lang=lang))
         return STATE_WAITING_FOR_SUB_DETAILS
-    await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_generating', lang=lang)); code = str(uuid.uuid4().hex)[:8]
-    end_datetime = datetime.now(UTC_TZ) + timedelta(days=days); sub_end_ts = int(end_datetime.timestamp())
-    if db.create_invitation(code, sub_end_ts): end_date_str = format_dt(sub_end_ts, fmt='%Y-%m-%d %H:%M UTC'); db.log_event_db("Invite Generated", f"Code: {code}, Days: {days}, Bot Count: {bots_needed}", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_success', lang=lang, code=code, end_date=end_date_str, count=bots_needed))
-    else: db.log_event_db("Invite Gen Failed", f"Code: {code} (duplicate?)", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_db_error', lang=lang))
-    clear_conversation_data(context); return ConversationHandler.END
+    except Exception as e:
+        log.error(f"Error generating invite code: {e}", exc_info=True)
+        _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang))
+        return ConversationHandler.END
 
 async def process_admin_extend_code(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); code = update.message.text.strip().lower(); client = db.find_client_by_code(code)
@@ -1250,30 +1275,64 @@ async def handle_client_callback(update: Update, context: CallbackContext) -> st
     return None
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); query_id = query.id if query else None
-    log.info(f"handle_admin_callback: User {user_id}, Data {query.data if query else 'N/A'}, Lang {lang}")
-    if not is_admin(user_id):
-        if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer(get_text(user_id, 'unauthorized', lang=lang), show_alert=True); context.bot_data[f'answered_{query_id}'] = True; return ConversationHandler.END
-    data = query.data;
+    query = update.callback_query
+    user_id, lang = get_user_id_and_lang(update, context)
+    data = query.data
+    query_id = query.id
+    
     action = "" 
     if data.startswith(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirm_"): action = "remove_bot_confirm"
     elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_"): action = "remove_bot_confirmed"
     else: action = data.split(CALLBACK_ADMIN_PREFIX)[1].split('?')[0]
+    
     log.debug(f"Admin Callback Route: Action='{action}', Data='{data}'")
-    if action == "add_bot_prompt": await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_prompt_phone', lang=lang)); return STATE_WAITING_FOR_PHONE
-    elif action == "remove_bot_select": return await admin_select_userbot_to_remove(update, context)
-    elif action == "list_bots": return await admin_list_userbots(update, context)
-    elif action == "gen_invite_prompt": await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_prompt_details', lang=lang)); return STATE_WAITING_FOR_SUB_DETAILS
-    elif action == "view_subs": return await admin_view_subscriptions(update, context)
-    elif action == "extend_sub_prompt": await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_prompt_code', lang=lang)); return STATE_WAITING_FOR_EXTEND_CODE
-    elif action == "assign_bots_prompt": await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_prompt_code', lang=lang)); return STATE_WAITING_FOR_ADD_USERBOTS_CODE
-    elif action == "view_logs": return await admin_view_system_logs(update, context)
-    elif action == "remove_bot_confirm": return await admin_confirm_remove_userbot(update, context)
-    elif action == "remove_bot_confirmed": return await admin_remove_userbot_confirmed(update, context)
-    elif action == "back_to_menu": clear_conversation_data(context); return admin_command(update, context)
-    else: log.warning(f"Unhandled ADMIN CB: Action='{action}', Data='{data}'");
-    if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer("Action not recognized.", show_alert=True); context.bot_data[f'answered_{query_id}'] = True
-    return None
+    
+    try:
+        if action == "add_bot_prompt":
+            _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_prompt_phone', lang=lang))
+            return STATE_WAITING_FOR_PHONE
+        elif action == "remove_bot_select":
+            context.dispatcher.run_async(admin_select_userbot_to_remove, update, context)
+            return None
+        elif action == "list_bots":
+            context.dispatcher.run_async(admin_list_userbots, update, context)
+            return None
+        elif action == "gen_invite_prompt":
+            _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_prompt_details', lang=lang))
+            return STATE_WAITING_FOR_SUB_DETAILS
+        elif action == "view_subs":
+            context.dispatcher.run_async(admin_view_subscriptions, update, context)
+            return None
+        elif action == "extend_sub_prompt":
+            _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_prompt_code', lang=lang))
+            return STATE_WAITING_FOR_EXTEND_CODE
+        elif action == "assign_bots_prompt":
+            _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_prompt_code', lang=lang))
+            return STATE_WAITING_FOR_ADD_USERBOTS_CODE
+        elif action == "view_logs":
+            context.dispatcher.run_async(admin_view_system_logs, update, context)
+            return None
+        elif action == "remove_bot_confirm":
+            context.dispatcher.run_async(admin_confirm_remove_userbot, update, context)
+            return None
+        elif action == "remove_bot_confirmed":
+            context.dispatcher.run_async(admin_remove_userbot_confirmed, update, context)
+            return None
+        elif action == "back_to_menu":
+            clear_conversation_data(context)
+            return admin_command(update, context)
+        else:
+            log.warning(f"Unhandled ADMIN CB: Action='{action}', Data='{data}'")
+            if query_id and not context.bot_data.get(f'answered_{query_id}', False):
+                context.dispatcher.run_async(query.answer, "Action not recognized.", show_alert=True)
+                context.bot_data[f'answered_{query_id}'] = True
+            return None
+    except Exception as e:
+        log.error(f"handle_admin_callback error: {e}", exc_info=True)
+        if query_id and not context.bot_data.get(f'answered_{query_id}', False):
+            context.dispatcher.run_async(query.answer, get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+            context.bot_data[f'answered_{query_id}'] = True
+        return None
 
 async def handle_folder_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; action = data.split(CALLBACK_FOLDER_PREFIX)[1].split('?')[0]; query_id = query.id
