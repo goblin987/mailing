@@ -6,7 +6,7 @@ import logging
 import logging.handlers # For RotatingFileHandler
 import types
 import sys
-import filetype
+import filetype # Ensure this is imported
 import pytz
 from dotenv import load_dotenv
 
@@ -23,28 +23,22 @@ MAX_LOG_BYTES = 10 * 1024 * 1024  # Max log file size (10MB)
 LOG_BACKUP_COUNT = 5  # Number of old log files to keep
 # Note: The 'groups_reached' stat in the DB might be unreliable/deprecated.
 
-# --- Compatibility Shim ---
-# Fake 'imghdr' module for Python 3.11+ compatibility where imghdr is deprecated
-# Define logger for this shim AFTER main logging setup if possible, or use basic print/stderr
-# Using a placeholder name for now, will assign logger later if needed.
-_imghdr_compat_logger = None
-try:
-    import imghdr
-    # Can't use log object yet
-    print("DEBUG: Using system 'imghdr' module.")
-except ImportError:
-    print("DEBUG: System 'imghdr' not found, creating compatibility shim.")
+# --- Compatibility Shim for imghdr ---
+_imghdr_compat_logger = None # Will be assigned after logging is fully set up
+
+if sys.version_info >= (3, 11): # If Python 3.11 or newer
+    # Forcibly use the filetype-based shim
+    print("INFO: Python 3.11+ detected, using 'filetype' based compatibility shim for 'imghdr'.")
     imghdr_module = types.ModuleType('imghdr')
-    def what(file, h=None):
+    def what_shim(file, h=None): # Renamed to avoid conflict if system imghdr is later imported
         """Basic file type check using 'filetype' as a replacement for imghdr.what."""
         global _imghdr_compat_logger
         try:
             buf = None
-            # Read a small chunk for type detection
             if hasattr(file, 'read'):
-                start_pos = file.tell() # Remember position
-                buf = file.read(261) # Read common header size max (like JPEG)
-                file.seek(start_pos) # Reset position
+                start_pos = file.tell()
+                buf = file.read(261)
+                file.seek(start_pos)
             elif isinstance(file, str):
                 if not os.path.exists(file): return None
                 with open(file, 'rb') as f:
@@ -52,28 +46,52 @@ except ImportError:
             elif isinstance(file, bytes):
                  buf = file[:261]
             else:
-                return None # Unsupported type
+                return None
 
             if not buf: return None
-
-            # Use filetype library
             kind = filetype.guess(buf)
-            # Return the common image extension if it's an image type known by filetype
-            # imghdr typically returned 'jpeg', 'png', 'gif', etc.
             if kind and kind.mime.startswith('image/'):
-                 # filetype returns 'jpg', imghdr returned 'jpeg'
                  return 'jpeg' if kind.extension == 'jpg' else kind.extension
-            return None # Return None if not a recognized image type
+            return None
         except Exception as e:
-             # Use logger only if it has been initialized
-             if _imghdr_compat_logger:
+             if _imghdr_compat_logger: # Use logger only if it has been initialized
                   _imghdr_compat_logger.warning(f"Error during 'what' compatibility check: {e}")
              else:
                   print(f"WARNING: Error during 'what' compatibility check: {e}", file=sys.stderr)
              return None
-    imghdr_module.what = what
+    imghdr_module.what = what_shim
     sys.modules['imghdr'] = imghdr_module
-    print("INFO: Using 'filetype' based compatibility shim for 'imghdr'.")
+else:
+    # For older Python versions, try importing system imghdr first
+    try:
+        import imghdr
+        print("DEBUG: Using system 'imghdr' module.")
+    except ImportError:
+        print("DEBUG: System 'imghdr' not found (Python < 3.11), creating compatibility shim.")
+        imghdr_module = types.ModuleType('imghdr')
+        # Duplicating the shim logic here for older Pythons if system imghdr is missing
+        def what_shim_old(file, h=None): # Renamed to avoid conflict
+            global _imghdr_compat_logger
+            try:
+                buf = None
+                if hasattr(file, 'read'):
+                    start_pos = file.tell(); buf = file.read(261); file.seek(start_pos)
+                elif isinstance(file, str):
+                    if not os.path.exists(file): return None
+                    with open(file, 'rb') as f: buf = f.read(261)
+                elif isinstance(file, bytes): buf = file[:261]
+                else: return None
+                if not buf: return None
+                kind = filetype.guess(buf)
+                if kind and kind.mime.startswith('image/'):
+                     return 'jpeg' if kind.extension == 'jpg' else kind.extension
+                return None
+            except Exception as e:
+                 if _imghdr_compat_logger: _imghdr_compat_logger.warning(f"Error during 'what' (old Python shim) check: {e}")
+                 else: print(f"WARNING: Error during 'what' (old Python shim) check: {e}", file=sys.stderr)
+                 return None
+        imghdr_module.what = what_shim_old
+        sys.modules['imghdr'] = imghdr_module
 
 
 # --- Data Directory Setup ---
@@ -183,7 +201,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] - %(message)s' # BasicConfig needs format too if setting here
 )
 # --- Define the main log object HERE ---
-log = logging.getLogger(__name__)
+log = logging.getLogger(__name__) # Use __name__ (config) for the logger name for this file
 # --- Assign logger to imghdr shim now that it exists ---
 _imghdr_compat_logger = logging.getLogger('imghdr_compat')
 
