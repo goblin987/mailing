@@ -518,7 +518,7 @@ async def client_select_folder_to_edit_or_delete(update: Update, context: Callba
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context);
     try:
         current_page = 0
-        if '?' in query.data:
+        if query and query.data and '?' in query.data: # Added query and query.data check
             _, page_data = query.data.split('?', 1)
             current_page = int(page_data.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
@@ -600,7 +600,7 @@ async def client_select_groups_to_remove(update: Update, context: CallbackContex
     if not folder_id or not folder_name: await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True); return await client_folder_menu(update, context)
     try:
         current_page = 0
-        if '?' in query.data:
+        if query and query.data and '?' in query.data: # Added query and query.data check
             _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     groups = db.get_target_groups_details_by_folder(folder_id)
@@ -749,7 +749,7 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
             part_markup = markup if i == len(parts) - 1 else None
             try:
                 await context.bot.send_message(user_id, part, parse_mode=ParseMode.HTML, reply_markup=part_markup, disable_web_page_preview=True)
-                if i < len(parts) - 1: # Correctly indented under the try
+                if i < len(parts) - 1:
                     await asyncio.sleep(0.5)
             except Exception as send_e:
                 log.error(f"Error sending split join results part {i+1}: {send_e}")
@@ -832,7 +832,7 @@ async def process_task_start_time(update: Update, context: CallbackContext) -> i
     if task_settings is None: await _send_or_edit_message(update, context, get_text(user_id, 'session_expired', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
     try:
         hour, minute = map(int, time_str.split(':'))
-        if not (0 <= hour <= 23 and 0 <= minute <= 59): # Ensure this check is here
+        if not (0 <= hour <= 23 and 0 <= minute <= 59): # Corrected this line
             raise ValueError("Invalid hour/minute")
     except (ValueError, TypeError):
         await _send_or_edit_message(update, context, get_text(user_id, 'task_error_invalid_time', lang=lang))
@@ -879,7 +879,7 @@ async def task_select_folder_for_target(update: Update, context: CallbackContext
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
     try:
         current_page = 0
-        if '?' in query.data:
+        if query and query.data and '?' in query.data:
             _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     folders = db.get_folders_by_user(user_id)
@@ -940,7 +940,7 @@ async def admin_list_userbots(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
     try:
         current_page = 0
-        if query and query.data and '?' in query.data: # Added query and query.data check
+        if query and query.data and '?' in query.data:
             _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     all_bots = db.get_all_userbots()
@@ -959,7 +959,7 @@ async def admin_select_userbot_to_remove(update: Update, context: CallbackContex
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
     try:
         current_page = 0
-        if query and query.data and '?' in query.data: # Added query and query.data check
+        if query and query.data and '?' in query.data:
             _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     all_bots = db.get_all_userbots()
@@ -981,14 +981,14 @@ async def admin_confirm_remove_userbot(update: Update, context: CallbackContext)
          if query_id and not context.bot_data.get(f'answered_{query_id}', False):
              await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
              context.bot_data[f'answered_{query_id}'] = True
-         return admin_command(update, context)
+         return admin_command(update, context) # Return sync command
 
      bot_info = db.find_userbot(phone_to_remove)
      if not bot_info:
          if query_id and not context.bot_data.get(f'answered_{query_id}', False):
              await query.answer(get_text(user_id, 'admin_userbot_not_found', lang=lang), show_alert=True)
              context.bot_data[f'answered_{query_id}'] = True
-         return admin_command(update, context)
+         return admin_command(update, context) # Return sync command
      username = bot_info['username']; display_name = html.escape(f"@{username}" if username else phone_to_remove)
      text = get_text(user_id, 'admin_userbot_remove_confirm_text', lang=lang, display_name=display_name)
      keyboard = [[ InlineKeyboardButton(get_text(user_id, 'button_yes', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_{phone_to_remove}"), InlineKeyboardButton(get_text(user_id, 'button_no', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu") ]]; markup = InlineKeyboardMarkup(keyboard)
@@ -1004,7 +1004,7 @@ async def admin_remove_userbot_confirmed(update: Update, context: CallbackContex
         if query_id and not context.bot_data.get(f'answered_{query_id}', False):
             await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
             context.bot_data[f'answered_{query_id}'] = True
-        return admin_command(update, context)
+        return admin_command(update, context) # Return sync command
     bot_info = db.find_userbot(phone_to_remove); display_name = "N/A";
     if bot_info: display_name = html.escape(f"@{bot_info['username']}" if bot_info['username'] else phone_to_remove)
     log.info(f"Admin {user_id} confirmed removal of userbot {phone_to_remove}")
@@ -1014,17 +1014,21 @@ async def admin_remove_userbot_confirmed(update: Update, context: CallbackContex
         telethon_api.delete_session_files_for_phone(phone_to_remove)
         db.log_event_db("Userbot Removed", f"Phone: {phone_to_remove}", user_id=user_id, userbot_phone=phone_to_remove); await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_remove_success', lang=lang, display_name=display_name))
     else: await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_remove_error', lang=lang))
-    return admin_command(update, context)
+    return admin_command(update, context) # Return sync command
 
 async def admin_view_subscriptions(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
     try:
         current_page = 0
-        if query and query.data and '?' in query.data: # Added query and query.data check
+        if query and query.data and '?' in query.data:
             _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     subs = db.get_all_subscriptions()
-    if not subs: text = get_text(user_id, 'admin_subs_none', lang=lang); markup = InlineKeyboardMarkup([[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")]]); await _send_or_edit_message(update, context, text, reply_markup=markup); return ConversationHandler.END
+    if not subs:
+        text = get_text(user_id, 'admin_subs_none', lang=lang)
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")]])
+        await _send_or_edit_message(update, context, text, reply_markup=markup)
+        return ConversationHandler.END # Moved inside the if block
     total_items = len(subs); start_index = current_page * ITEMS_PER_PAGE; end_index = start_index + ITEMS_PER_PAGE; subs_page = subs[start_index:end_index]
     text = f"<b>{get_text(user_id, 'admin_subs_title', lang=lang)}</b> (Page {current_page + 1}/{math.ceil(total_items / ITEMS_PER_PAGE)})\n\n"
     for sub in subs_page:
