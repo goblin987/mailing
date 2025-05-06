@@ -133,89 +133,71 @@ def _send_or_edit_message(update: Update, context: CallbackContext, text: str, *
         return
 
     message_id_to_edit = None
-    query = update.callback_query if update else None
-    query_id = query.id if query else None
-    answered_callback = False
-
-    if query and query.message:
-        log.debug(f"_send_or_edit_message: Callback query detected. Original message_id: {query.message.message_id}")
-        message_id_to_edit = query.message.message_id
-    elif CTX_MESSAGE_ID in context.user_data: 
-        message_id_to_edit = context.user_data.get(CTX_MESSAGE_ID)
-        log.debug(f"_send_or_edit_message: Using message_id from context: {message_id_to_edit}")
+    if update.callback_query:
+        message_id_to_edit = update.callback_query.message.message_id if update.callback_query.message else None
+        log.debug(f"_send_or_edit_message: Callback query detected. Original message_id: {message_id_to_edit}")
     
     log.debug(f"_send_or_edit_message: Final message_id_to_edit (for editing attempts): {message_id_to_edit}")
 
-    reply_markup = kwargs.get('reply_markup')
-    if reply_markup and not isinstance(reply_markup, InlineKeyboardMarkup):
-        log.warning("_send_or_edit_message: reply_markup is not InlineKeyboardMarkup, removing.")
-        kwargs.pop('reply_markup', None) 
-
-    sent_message_object = None
-
     try:
-        if query and query.message: 
-            log.info(f"_send_or_edit_message: Attempting to EDIT message {query.message.message_id} in chat {chat_id}")
-            try:
-                if query_id and not context.bot_data.get(f'answered_{query_id}', False):
-                    query.answer()
-                    context.bot_data[f'answered_{query_id}'] = True
-                    log.debug(f"_send_or_edit_message: Answered callback query {query_id}")
-                answered_callback = True
-            except (BadRequest, TelegramError) as cb_e:
-                log.debug(f"_send_or_edit_message: Ignoring callback answer error: {cb_e}")
+        if message_id_to_edit:
+            log.info(f"_send_or_edit_message: Attempting to EDIT message {message_id_to_edit} in chat {chat_id}")
+            if update.callback_query and update.callback_query.id and not context.bot_data.get(f'answered_{update.callback_query.id}', False):
+                context.dispatcher.run_async(update.callback_query.answer)
+                context.bot_data[f'answered_{update.callback_query.id}'] = True
+                log.debug(f"_send_or_edit_message: Answered callback query {update.callback_query.id}")
             
-            context.bot.edit_message_text(chat_id=chat_id, message_id=query.message.message_id, text=text, **kwargs)
-            log.info(f"_send_or_edit_message: Successfully EDITED message {query.message.message_id}")
-            context.user_data[CTX_MESSAGE_ID] = query.message.message_id
+            result = context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id_to_edit,
+                text=text,
+                **kwargs
+            )
+            log.info(f"_send_or_edit_message: Successfully EDITED message {message_id_to_edit}")
+            return result
+        else:
+            reply_to = None
+            if update.message and update.message.message_id:
+                reply_to = update.message.message_id
+                log.info(f"_send_or_edit_message: Attempting to REPLY to incoming message {reply_to} in chat {chat_id}")
+            else:
+                log.info(f"_send_or_edit_message: Sending NEW message to chat {chat_id}")
+            
+            result = context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_to_message_id=reply_to,
+                **kwargs
+            )
+            log.info(f"_send_or_edit_message: Successfully {'REPLIED' if reply_to else 'SENT'} with new message {result.message_id}")
+            return result
 
-        elif update and update.message: 
-            log.info(f"_send_or_edit_message: Attempting to REPLY to incoming message {update.message.message_id} in chat {chat_id}")
-            sent_message_object = update.message.reply_text(text=text, **kwargs)
-            log.info(f"_send_or_edit_message: Successfully REPLIED with new message {sent_message_object.message_id if sent_message_object else 'N/A'}")
-            if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
-        
-        elif message_id_to_edit and chat_id: 
-            log.info(f"_send_or_edit_message: Attempting to EDIT message {message_id_to_edit} (from context) in chat {chat_id}")
-            context.bot.edit_message_text(chat_id=chat_id, message_id=message_id_to_edit, text=text, **kwargs)
-            log.info(f"_send_or_edit_message: Successfully EDITED message {message_id_to_edit} (from context)")
-
-        else: 
-            log.info(f"_send_or_edit_message: Attempting to SEND NEW message to chat {chat_id}")
-            sent_message_object = context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            log.info(f"_send_or_edit_message: Successfully SENT NEW message {sent_message_object.message_id if sent_message_object else 'N/A'}")
-            if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
-
-    except BadRequest as e:
-        log.error(f"_send_or_edit_message: BadRequest for user {user_id}, chat {chat_id}: {e}", exc_info=True)
-        if "message is not modified" in str(e).lower():
-            log.debug(f"_send_or_edit_message: Ignoring 'message is not modified' error.")
-            if query_id and not answered_callback and not context.bot_data.get(f'answered_{query_id}', False):
-                try: query.answer(); context.bot_data[f'answered_{query_id}'] = True
-                except Exception: pass
-        elif "message to edit not found" in str(e).lower() or "chat not found" in str(e).lower():
-            log.warning(f"_send_or_edit_message: Failed to edit (target message/chat not found): {e}. Attempting to send new.")
-            try:
-                if chat_id:
-                    sent_message_object = context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-                    log.info(f"_send_or_edit_message: Successfully SENT NEW message {sent_message_object.message_id} after edit failed.")
-                    if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
-            except Exception as retry_e:
-                log.error(f"_send_or_edit_message: Final fallback send message failed: {retry_e}")
     except Exception as e:
-        log.error(f"_send_or_edit_message: Unexpected error for user {user_id}, chat {chat_id}: {e}", exc_info=True)
-
+        log.error(f"_send_or_edit_message: Error {'editing' if message_id_to_edit else 'sending'} message: {e}", exc_info=True)
+        if message_id_to_edit:
+            log.info("_send_or_edit_message: Edit failed, attempting to send as new message")
+            try:
+                result = context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+                log.info(f"_send_or_edit_message: Successfully sent fallback message {result.message_id}")
+                return result
+            except Exception as e2:
+                log.error(f"_send_or_edit_message: Error sending fallback message: {e2}", exc_info=True)
+        return None
 
 def _show_menu_async(update: Update, context: CallbackContext, menu_builder_func):
     user_id, lang = get_user_id_and_lang(update, context)
     log.info(f"_show_menu_async: Building menu with {menu_builder_func.__name__} for user {user_id}, lang {lang}")
+    
     message, markup, parse_mode = menu_builder_func(user_id, context)
     if not message:
         log.error(f"_show_menu_async: Menu builder {menu_builder_func.__name__} returned empty message for user {user_id}. Aborting send.")
         return
+    
     log.info(f"_show_menu_async: Menu built. Message: '{html.escape(message[:70])}...'. Markup: {markup is not None}. ParseMode: {parse_mode}")
-    _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode)
+    
+    result = _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode)
     log.info(f"_show_menu_async: Finished attempt to send/edit menu for user {user_id}")
+    return result
 
 def error_handler(update: object, context: CallbackContext) -> None:
     log.error(f"Exception while handling an update:", exc_info=context.error)
@@ -1378,7 +1360,7 @@ async def handle_generic_callback(update: Update, context: CallbackContext) -> s
         if query_id and not context.bot_data.get(f'answered_{query_id}', False): await query.answer("Action not recognized.", show_alert=True); context.bot_data[f'answered_{query_id}'] = True
     return None
 
-async def main_callback_handler(update: Update, context: CallbackContext) -> str | int | None:
+def main_callback_handler(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
     if not query or not query.data: 
         log.warning("main_callback_handler: Callback received without query or query.data.")
@@ -1392,36 +1374,56 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
     query_id = query.id
 
     try:
-        if data.startswith(CALLBACK_CLIENT_PREFIX): next_state = await handle_client_callback(update, context)
-        elif data.startswith(CALLBACK_ADMIN_PREFIX): next_state = await handle_admin_callback(update, context)
-        elif data.startswith(CALLBACK_FOLDER_PREFIX): next_state = await handle_folder_callback(update, context)
-        elif data.startswith(CALLBACK_TASK_PREFIX): next_state = await handle_task_callback(update, context)
-        elif data.startswith(CALLBACK_JOIN_PREFIX): next_state = await handle_join_callback(update, context)
-        elif data.startswith(CALLBACK_LANG_PREFIX): next_state = await handle_language_callback(update, context)
-        elif data.startswith(CALLBACK_INTERVAL_PREFIX): next_state = await handle_interval_callback(update, context)
-        elif data.startswith(CALLBACK_GENERIC_PREFIX): next_state = await handle_generic_callback(update, context)
+        if data.startswith(CALLBACK_CLIENT_PREFIX):
+            context.dispatcher.run_async(handle_client_callback, update, context)
+            next_state = STATE_WAITING_FOR_CODE
+        elif data.startswith(CALLBACK_ADMIN_PREFIX):
+            if "gen_invite_prompt" in data:
+                _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_prompt_details', lang=lang))
+                next_state = STATE_WAITING_FOR_SUB_DETAILS
+            else:
+                context.dispatcher.run_async(handle_admin_callback, update, context)
+                next_state = None
+        elif data.startswith(CALLBACK_FOLDER_PREFIX):
+            context.dispatcher.run_async(handle_folder_callback, update, context)
+            next_state = None
+        elif data.startswith(CALLBACK_TASK_PREFIX):
+            context.dispatcher.run_async(handle_task_callback, update, context)
+            next_state = None
+        elif data.startswith(CALLBACK_JOIN_PREFIX):
+            context.dispatcher.run_async(handle_join_callback, update, context)
+            next_state = None
+        elif data.startswith(CALLBACK_LANG_PREFIX):
+            context.dispatcher.run_async(handle_language_callback, update, context)
+            next_state = None
+        elif data.startswith(CALLBACK_INTERVAL_PREFIX):
+            context.dispatcher.run_async(handle_interval_callback, update, context)
+            next_state = None
+        elif data.startswith(CALLBACK_GENERIC_PREFIX):
+            context.dispatcher.run_async(handle_generic_callback, update, context)
+            next_state = None
         else:
             log.warning(f"main_callback_handler: Unhandled CB prefix. User={user_id}, Data='{data}'")
             if query_id and not context.bot_data.get(f'answered_{query_id}', False): 
-                await query.answer("Unknown button.", show_alert=True)
+                context.dispatcher.run_async(query.answer, "Unknown button.", show_alert=True)
                 context.bot_data[f'answered_{query_id}'] = True
             next_state = ConversationHandler.END 
 
         if query_id and not context.bot_data.get(f'answered_{query_id}', False):
-             await query.answer()
-             context.bot_data[f'answered_{query_id}'] = True
-             log.debug(f"main_callback_handler: Answered CB {query_id} (fallback)")
+            context.dispatcher.run_async(query.answer)
+            context.bot_data[f'answered_{query_id}'] = True
+            log.debug(f"main_callback_handler: Answered CB {query_id} (fallback)")
 
     except Exception as e:
         log.error(f"main_callback_handler: Error processing callback data '{data}' for user {user_id}: {e}", exc_info=True)
         try:
-             if query_id and not context.bot_data.get(f'answered_{query_id}', False): 
-                 await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-                 context.bot_data[f'answered_{query_id}'] = True
+            if query_id and not context.bot_data.get(f'answered_{query_id}', False): 
+                context.dispatcher.run_async(query.answer, get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+                context.bot_data[f'answered_{query_id}'] = True
         except Exception as cb_answer_err:
             log.error(f"main_callback_handler: Error answering callback query after exception: {cb_answer_err}")
         
-        context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'error_generic', lang=lang))
+        _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang))
         next_state = ConversationHandler.END
         
     log.info(f"main_callback_handler: Returning next_state: {next_state} for User={user_id}, Data='{data}'")
