@@ -339,7 +339,8 @@ async def process_admin_api_id(update: Update, context: CallbackContext) -> str 
     user_id, lang = get_user_id_and_lang(update, context); api_id_str = update.message.text.strip()
     try:
         api_id = int(api_id_str)
-        if api_id <= 0: raise ValueError("API ID must be positive") # Check positivity
+        if api_id <= 0:
+            raise ValueError("API ID must be positive")
         context.user_data[CTX_API_ID] = api_id
         log.info(f"Admin {user_id} API ID OK for {context.user_data.get(CTX_PHONE)}")
     except (ValueError, TypeError):
@@ -426,7 +427,7 @@ async def process_admin_invite_details(update: Update, context: CallbackContext)
         days = int(match.group(1))
         bots_needed = int(match.group(2))
         if days <= 0 or bots_needed <= 0:
-            raise ValueError("Days and bots must be positive") # More specific error for the raise
+            raise ValueError("Days and bots must be positive")
     except (ValueError, AssertionError):
         await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_numbers', lang=lang)); return STATE_WAITING_FOR_SUB_DETAILS
     await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_generating', lang=lang)); code = str(uuid.uuid4().hex)[:8]
@@ -444,8 +445,12 @@ async def process_admin_extend_code(update: Update, context: CallbackContext) ->
 async def process_admin_extend_days(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); days_str = update.message.text.strip(); code = context.user_data.get(CTX_EXTEND_CODE)
     if not code: await _send_or_edit_message(update, context, get_text(user_id, 'session_expired', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
-    try: days_to_add = int(days_str); if days_to_add <= 0: raise ValueError("Days must be positive")
-    except (ValueError, AssertionError): await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_days', lang=lang)); return STATE_WAITING_FOR_EXTEND_DAYS
+    try:
+        days_to_add = int(days_str)
+        if days_to_add <= 0:
+            raise ValueError("Days must be positive")
+    except (ValueError, AssertionError):
+        await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_days', lang=lang)); return STATE_WAITING_FOR_EXTEND_DAYS
     client = db.find_client_by_code(code)
     if not client: await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_code', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
     current_end_ts = client['subscription_end']; now_ts = int(datetime.now(UTC_TZ).timestamp()); start_ts = max(now_ts, current_end_ts)
@@ -931,9 +936,10 @@ async def admin_select_userbot_to_remove(update: Update, context: CallbackContex
 async def admin_confirm_remove_userbot(update: Update, context: CallbackContext) -> int:
      query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
      try: phone_to_remove = query.data.split(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirm_")[1]
-     except IndexError: log.error(f"Could not parse phone: {query.data}");
-     if hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-     return admin_command(update, context)
+     except IndexError:
+         log.error(f"Could not parse phone: {query.data}");
+         if hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+         return admin_command(update, context)
      bot_info = db.find_userbot(phone_to_remove)
      if not bot_info:
          if hasattr(query, 'answer'): await query.answer(get_text(user_id, 'admin_userbot_not_found', lang=lang), show_alert=True)
@@ -946,9 +952,10 @@ async def admin_confirm_remove_userbot(update: Update, context: CallbackContext)
 async def admin_remove_userbot_confirmed(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
     try: phone_to_remove = query.data.split(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_")[1]
-    except IndexError: log.error(f"Could not parse phone: {query.data}");
-    if hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-    return admin_command(update, context)
+    except IndexError:
+        log.error(f"Could not parse phone: {query.data}");
+        if hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+        return admin_command(update, context)
     bot_info = db.find_userbot(phone_to_remove); display_name = "N/A";
     if bot_info: display_name = html.escape(f"@{bot_info['username']}" if bot_info['username'] else phone_to_remove)
     log.info(f"Admin {user_id} confirmed removal of userbot {phone_to_remove}")
@@ -1191,5 +1198,3 @@ main_conversation = ConversationHandler(
     name="main_conversation",
     persistent=True,
 )
-
-log.info("Handlers module loaded with corrected sync/async definitions.")
