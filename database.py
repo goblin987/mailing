@@ -123,11 +123,10 @@ def init_db():
             timestamp INTEGER NOT NULL, -- Unix timestamp (UTC)
             event TEXT NOT NULL, -- Type of event (e.g., 'Client Activated', 'Task Run', 'Join Failed')
             user_id INTEGER, -- Client User ID or Admin ID involved
-            client_id INTEGER, -- Store client User ID specifically if available (redundant?)
             userbot_phone TEXT, -- Involved userbot phone number
             details TEXT -- Additional information/error message
         );
-        -- Added client_id column to logs for easier filtering? Maybe stick to user_id. Let's remove client_id for simplicity.
+        -- Removed client_id from logs for simplicity.
 
         CREATE TABLE IF NOT EXISTS userbot_settings (
             client_id INTEGER NOT NULL, -- Client's user_id, FK to clients(user_id)
@@ -209,7 +208,6 @@ def log_event_db(event, details="", user_id=None, userbot_phone=None):
 
 
 # --- Client Functions ---
-# (find_client_by_user_id, find_client_by_code, activate_client, get_user_language, set_user_language seem OK)
 def find_client_by_user_id(user_id):
     """Retrieves client data by Telegram User ID."""
     sql = "SELECT * FROM clients WHERE user_id = ?"
@@ -379,7 +377,6 @@ def get_all_subscriptions():
         return []
 
 # --- Userbot Functions ---
-# (find_userbot, get_all_userbots, add_userbot, update_userbot_status seem OK)
 def find_userbot(phone):
     """Retrieves userbot data by phone number."""
     sql = "SELECT * FROM userbots WHERE phone_number = ?"
@@ -470,6 +467,7 @@ def update_userbot_status(phone, status, username=None, last_error=None):
     """
     try:
         conn = _get_db_connection()
+        updated = False # Initialize updated flag
         with db_lock:
             cursor = conn.cursor()
             cursor.execute(sql, (status, username, last_error, phone))
@@ -523,9 +521,13 @@ def assign_userbots_to_client(code, phones_to_assign: list):
                          if bot_info and bot_info['assigned_client'] is not None:
                               log.warning(f"Could not assign bot {phone} to {code}: Already assigned to {bot_info['assigned_client']}")
                               failed_phones.append(f"{phone} (already assigned)")
-                         else:
-                              log.warning(f"Could not assign bot {phone} to {code}: Bot not found or error.")
+                         elif not bot_info: # Bot not found in userbots table
+                              log.warning(f"Could not assign bot {phone} to {code}: Bot not found.")
                               failed_phones.append(f"{phone} (not found)")
+                         else: # Bot exists but other update condition failed (e.g. assigned_client was not NULL but update failed)
+                              log.warning(f"Could not assign bot {phone} to {code}: Bot found but update failed (unexpected).")
+                              failed_phones.append(f"{phone} (update error)")
+
 
                 cursor.execute("COMMIT") # Commit successful assignments
 
@@ -549,42 +551,35 @@ def assign_userbots_to_client(code, phones_to_assign: list):
 
 
 def remove_userbot(phone):
-    """Removes a userbot record from the database and attempts to delete session file."""
+    """Removes a userbot record from the database."""
     sql = "DELETE FROM userbots WHERE phone_number = ?"
-    session_path = _get_session_path(phone) # Get session path before deleting record
+    # Session file path and deletion logic removed from here.
+    # It will be handled by the caller in handlers.py, which uses telethon_utils.delete_session_files_for_phone.
 
     try:
         conn = _get_db_connection()
         deleted_rows = 0
         with db_lock:
-            # Transaction ensures session file is deleted only if DB delete succeeds (or vice versa, depending on order)
-            # Let's delete from DB first.
             cursor = conn.cursor()
-            cursor.execute("BEGIN")
+            # Using a try-except block for the execute itself within the lock
             try:
                 cursor.execute(sql, (phone,))
                 deleted_rows = cursor.rowcount
-                cursor.execute("COMMIT") # Commit DB deletion
-            except sqlite3.Error as tx_e:
-                 log.error(f"DB Tx Error removing userbot {phone}: {tx_e}", exc_info=True)
-                 cursor.execute("ROLLBACK")
-                 return False # DB deletion failed
+            except sqlite3.Error as db_exec_e:
+                 log.error(f"DB Error executing remove userbot {phone}: {db_exec_e}", exc_info=True)
+                 return False # DB execution failed
 
         if deleted_rows > 0:
             log.info(f"Removed userbot {phone} from database.")
-            # Attempt to remove session file AFTER successful DB deletion
-            log.info(f"Attempting to remove session files for {phone} at {session_path}...")
-            _delete_session_file(phone) # Use helper to remove session + journal etc.
-            # Log event after successful removal
-            # log_event_db("Userbot Removed", f"Phone: {phone}", userbot_phone=phone) # Logged by caller usually
+            # Session file deletion is now handled by the caller.
             return True
         else:
             log.warning(f"Attempted to remove userbot {phone}, but it was not found in the database.")
             return False # Bot wasn't in DB
-
     except sqlite3.Error as e:
-        log.error(f"DB Connection Error removing userbot {phone}: {e}", exc_info=True)
+        log.error(f"DB Connection/General Error removing userbot {phone}: {e}", exc_info=True)
         return False
+
 
 def get_unassigned_userbots(limit):
     """Gets a list of phone numbers for active, unassigned userbots."""
@@ -722,7 +717,7 @@ def add_target_group(group_id, group_name, group_link, user_id, folder_id):
     # Require group_id to add a group reliably
     if group_id is None:
         log.warning(f"Attempted to add target group without ID to folder {folder_id} by user {user_id}. Link: {group_link}")
-        return False
+        return False # Indicates error/invalid input to caller
 
     sql = """
         INSERT INTO target_groups (group_id, group_name, group_link, added_by, folder_id)
@@ -745,14 +740,14 @@ def add_target_group(group_id, group_name, group_link, user_id, folder_id):
             else:
                  # This means ON CONFLICT happened (duplicate)
                  log.debug(f"Group ID {group_id} already exists in folder {folder_id} for user {user_id}. Ignored.")
-                 return False # Not inserted (was duplicate)
+                 return None # Changed from False to None to specifically indicate duplicate/ignored
     except sqlite3.IntegrityError as fk_e:
          # This likely means the folder_id or added_by (client user_id) is invalid/deleted
          log.error(f"DB Integrity Error adding target group {group_id} to folder {folder_id} for user {user_id}: {fk_e}. Foreign key constraint likely failed.")
-         return False
+         return False # Indicates DB error
     except sqlite3.Error as e:
         log.error(f"DB Error adding target group {group_id} to folder {folder_id} for user {user_id}: {e}")
-        return False
+        return False # Indicates DB error
 
 def get_target_groups_by_folder(folder_id):
     """Gets a list of group IDs belonging to a specific folder."""
@@ -842,7 +837,6 @@ def remove_all_target_groups_from_folder(folder_id, user_id):
         return -1 # Indicate error
 
 # --- Userbot Task Settings Functions ---
-# (get_userbot_task_settings seems OK)
 def get_userbot_task_settings(client_id, userbot_phone):
     """Retrieves task settings for a specific userbot and client."""
     sql = "SELECT * FROM userbot_settings WHERE client_id = ? AND userbot_phone = ?"
@@ -1005,7 +999,6 @@ def update_task_after_run(client_id, userbot_phone, run_start_time_ts, messages_
         return False
 
 # --- Logs ---
-# (get_recent_logs seems OK)
 def get_recent_logs(limit=25):
     """Retrieves the most recent log entries from the database."""
     # Ordering by timestamp DESC, then ID DESC as fallback for same timestamp
@@ -1021,7 +1014,6 @@ def get_recent_logs(limit=25):
         return []
 
 # --- Client Stats ---
-# (get_client_stats seems OK, relies on columns updated by update_task_after_run)
 def get_client_stats(user_id):
     """Retrieves aggregate statistics for a specific client from the clients table."""
     client = find_client_by_user_id(user_id)
