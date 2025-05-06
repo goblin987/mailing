@@ -197,6 +197,7 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
             try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang), parse_mode=parse_mode)
             except Exception as send_e: log.error(f"Failed to send fallback error msg after unexpected error to user {user_id}: {send_e}")
 
+
 # --- PTB Generic Error Handler ---
 async def error_handler(update: object, context: CallbackContext) -> None:
     """Log Errors caused by Updates and notify user."""
@@ -209,6 +210,7 @@ async def error_handler(update: object, context: CallbackContext) -> None:
         await _send_or_edit_message(update, context, error_message) # Use internal helper
     if hasattr(context, 'user_data'):
          clear_conversation_data(context)
+
 
 # --- Format Timestamp Helper ---
 def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> str:
@@ -342,9 +344,7 @@ async def process_admin_api_hash(update: Update, context: CallbackContext) -> st
         elif auth_status == 'password_needed': context.user_data[CTX_AUTH_DATA] = auth_data; await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_prompt_password', lang=lang, phone=phone)); return STATE_WAITING_FOR_PASSWORD
         elif auth_status == 'already_authorized':
              log.warning(f"Userbot {phone} is already authorized.");
-             if not db.find_userbot(phone):
-                 safe_phone_part = re.sub(r'[^\d]', '', phone); session_file_rel = f"{safe_phone_part or f'unknown_{random.randint(1000,9999)}'}.session"
-                 db.add_userbot(phone, session_file_rel, api_id, api_hash, 'active')
+             if not db.find_userbot(phone): safe_phone_part = re.sub(r'[^\d]', '', phone); session_file_rel = f"{safe_phone_part or f'unknown_{random.randint(1000,9999)}'}.session"; db.add_userbot(phone, session_file_rel, api_id, api_hash, 'active')
              else: db.update_userbot_status(phone, 'active')
              asyncio.create_task(telethon_api.get_userbot_runtime_info(phone))
              await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_already_auth', lang=lang, display_name=phone)); clear_conversation_data(context); return ConversationHandler.END
@@ -539,11 +539,10 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
                      reason = get_text(user_id, 'folder_add_db_error', lang=lang)
                      failed_count += 1
             else:
-                 # *** Corrected this block ***
-                 status_code = 'failed'
-                 reason = get_text(user_id, 'folder_resolve_error', lang=lang) + " (No ID)"
-                 failed_count += 1
-                 # *** End Correction ***
+                 # Resolved but no ID? Should not happen often but handle it.
+                 status_code = 'failed' # Corrected this line
+                 reason = get_text(user_id, 'folder_resolve_error', lang=lang) + " (No ID)" # Corrected this line
+                 failed_count += 1 # Corrected this line
         elif resolved and resolved.get('error'): status_code = 'failed'; reason = resolved.get('error'); failed_count += 1
         else: status_code = 'failed'; reason = get_text(user_id, 'folder_resolve_error', lang=lang); failed_count += 1
         results[link] = {'status': status_code, 'reason': reason}
@@ -663,13 +662,11 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
         all_results_text += "\n" + get_text(user_id, 'join_results_bot_header', lang=lang, display_name=bot_display_name)
         if isinstance(result_item, Exception): log.error(f"Join batch task for {phone} raised exception: {result_item}"); all_results_text += f"\n  -> {get_text(user_id, 'error_generic', lang=lang)} ({html.escape(str(result_item))})"; continue
         error_info, results_dict = result_item
-        # *** CORRECTED SYNTAX HERE ***
-        if error_info and error_info.get("error"):
+        if error_info and error_info.get("error"): # Corrected Syntax Here
             error_message_detail = error_info['error']
             log.error(f"Join batch error for {phone}: {error_message_detail}")
             generic_error_text = get_text(user_id, 'error_generic', lang=lang)
             all_results_text += f"\n  -> {generic_error_text} ({html.escape(error_message_detail)})"
-        # *** END FIX ***
         if not results_dict: all_results_text += f"\n  -> ({get_text(user_id, 'error_no_results', lang=lang)})"; continue
         processed_links_count = 0
         for link, (status, detail) in results_dict.items():
@@ -739,10 +736,25 @@ async def process_task_link(update: Update, context: CallbackContext, link_type:
     if link_type == 'fallback' and link_text.lower() == 'skip': task_settings['fallback_message_link'] = None; await _send_or_edit_message(update, context, get_text(user_id, 'task_set_skipped_fallback', lang=lang)); return await task_show_settings_menu(update, context)
     link_parsed_type, _ = telethon_api.parse_telegram_url_simple(link_text)
     if link_parsed_type != "message_link": await _send_or_edit_message(update, context, get_text(user_id, 'task_error_invalid_link', lang=lang)); return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
-    try: accessible = await telethon_api.check_message_link_access(phone, link_text)
-    if not accessible: await _send_or_edit_message(update, context, get_text(user_id, 'task_error_link_unreachable', lang=lang, bot_phone=phone)); return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
-    else: log.info(f"User {user_id} link {link_text} verified by bot {phone}")
-    except Exception as e: log.error(f"Error checking link access {phone} -> {link_text}: {e}"); await _send_or_edit_message(update, context, get_text(user_id, 'error_telegram_api', lang=lang, error=str(e))); return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
+    try:
+        log.info(f"Verifying link access for {link_text} via bot {phone}...")
+        # await _send_or_edit_message(update, context, get_text(user_id, 'task_verifying_link', lang=lang)) # Can add this back later if needed
+        accessible = await telethon_api.check_message_link_access(phone, link_text)
+        # *** CORRECTED INDENTATION HERE ***
+        if not accessible:
+            log.warning(f"Link {link_text} not accessible by bot {phone}.")
+            await _send_or_edit_message(update, context, get_text(user_id, 'task_error_link_unreachable', lang=lang, bot_phone=phone))
+            return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
+        else:
+            log.info(f"User {user_id} link {link_text} verified successfully by bot {phone}.")
+            # Continue execution after the try...except block
+            pass
+    except Exception as e:
+         log.error(f"Error checking link access {phone} -> {link_text}: {e}")
+         await _send_or_edit_message(update, context, get_text(user_id, 'error_telegram_api', lang=lang, error=str(e)))
+         # Stay in the same state if link check fails due to error
+         return STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
+    # --- Store the link (only if accessible check passed or wasn't performed/failed gracefully) ---
     if link_type == 'primary': task_settings['message_link'] = link_text; await _send_or_edit_message(update, context, get_text(user_id, 'task_set_success_msg', lang=lang)); return await task_show_settings_menu(update, context)
     else: task_settings['fallback_message_link'] = link_text; await _send_or_edit_message(update, context, get_text(user_id, 'task_set_success_fallback', lang=lang)); return await task_show_settings_menu(update, context)
 
@@ -932,7 +944,8 @@ async def admin_view_system_logs(update: Update, context: CallbackContext) -> in
 # --- Callback Routers --- (Keep async) ...
 async def handle_client_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; client_info = db.find_client_by_user_id(user_id)
-    if not client_info or client_info['subscription_end'] < int(datetime.now(UTC_TZ).timestamp()): log.warning(f"Expired/Invalid client {user_id} tried action: {data}"); await query.answer(get_text(user_id, 'subscription_expired', lang=lang), show_alert=True); clear_conversation_data(context); return ConversationHandler.END
+    if not client_info or client_info['subscription_end'] < int(datetime.now(UTC_TZ).timestamp()): log.warning(f"Expired/Invalid client {user_id} tried action: {data}");
+    if query and hasattr(query,'answer') and not query.answered: await query.answer(get_text(user_id, 'subscription_expired', lang=lang), show_alert=True); clear_conversation_data(context); return ConversationHandler.END
     action = data.split(CALLBACK_CLIENT_PREFIX)[1].split('?')[0]; log.debug(f"Client Callback Route: Action='{action}', Data='{data}'")
     if action == "select_bot_task": return await client_select_bot_generic(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP, 'task_select_userbot')
     elif action == "manage_folders": return await client_folder_menu(update, context)
@@ -940,12 +953,14 @@ async def handle_client_callback(update: Update, context: CallbackContext) -> st
     elif action == "view_stats": return await client_show_stats(update, context)
     elif action == "language": return await client_ask_select_language(update, context)
     elif action == "back_to_menu": clear_conversation_data(context); return await client_menu(update, context)
-    else: log.warning(f"Unhandled CLIENT CB: Action='{action}', Data='{data}'"); await query.answer("Action not recognized.", show_alert=True)
+    else: log.warning(f"Unhandled CLIENT CB: Action='{action}', Data='{data}'");
+    if query and hasattr(query,'answer') and not query.answered: await query.answer("Action not recognized.", show_alert=True)
     return None
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-    if not is_admin(user_id): await query.answer(get_text(user_id, 'unauthorized', lang=lang), show_alert=True); return ConversationHandler.END
+    if not is_admin(user_id):
+        if query and hasattr(query,'answer') and not query.answered: await query.answer(get_text(user_id, 'unauthorized', lang=lang), show_alert=True); return ConversationHandler.END
     data = query.data; action = data.split(CALLBACK_ADMIN_PREFIX)[1].split('?')[0]
     if action.startswith("remove_bot_confirm_"): action = "remove_bot_confirm"
     elif action.startswith("remove_bot_confirmed_"): action = "remove_bot_confirmed"
@@ -961,7 +976,8 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> str
     elif action == "remove_bot_confirm": return await admin_confirm_remove_userbot(update, context)
     elif action == "remove_bot_confirmed": return await admin_remove_userbot_confirmed(update, context)
     elif action == "back_to_menu": clear_conversation_data(context); return await admin_command(update, context)
-    else: log.warning(f"Unhandled ADMIN CB: Action='{action}', Data='{data}'"); await query.answer("Action not recognized.", show_alert=True)
+    else: log.warning(f"Unhandled ADMIN CB: Action='{action}', Data='{data}'");
+    if query and hasattr(query,'answer') and not query.answered: await query.answer("Action not recognized.", show_alert=True)
     return None
 
 async def handle_folder_callback(update: Update, context: CallbackContext) -> str | int | None:
@@ -1074,7 +1090,7 @@ main_conversation = ConversationHandler(
         # Admin States
         STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_phone)],
         STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_id)],
-        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash)], # Use original async version name
+        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash)],
         STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_code)],
         STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_password)],
         STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_invite_details)],
@@ -1109,4 +1125,3 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded with implemented functions.")
-# --- END OF FILE handlers.py ---
