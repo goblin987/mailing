@@ -134,54 +134,63 @@ def _send_or_edit_message(update: Update, context: CallbackContext, text: str, *
 
     message_id_to_edit = None
     if update.callback_query:
-        message_id_to_edit = update.callback_query.message.message_id if update.callback_query.message else None
-        log.debug(f"_send_or_edit_message: Callback query detected. Original message_id: {message_id_to_edit}")
-    
+        message_id_to_edit = update.callback_query.message.message_id
+        # Answer callback query to remove loading state
+        try:
+            update.callback_query.answer()
+        except Exception as e:
+            log.warning(f"Failed to answer callback query: {e}")
+
     log.debug(f"_send_or_edit_message: Final message_id_to_edit (for editing attempts): {message_id_to_edit}")
 
     try:
         if message_id_to_edit:
+            # Try to edit existing message
             log.info(f"_send_or_edit_message: Attempting to EDIT message {message_id_to_edit} in chat {chat_id}")
-            if update.callback_query and update.callback_query.id and not context.bot_data.get(f'answered_{update.callback_query.id}', False):
-                context.dispatcher.run_async(update.callback_query.answer)
-                context.bot_data[f'answered_{update.callback_query.id}'] = True
-                log.debug(f"_send_or_edit_message: Answered callback query {update.callback_query.id}")
-            
-            result = context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id_to_edit,
-                text=text,
-                **kwargs
-            )
-            log.info(f"_send_or_edit_message: Successfully EDITED message {message_id_to_edit}")
-            return result
-        else:
-            reply_to = None
-            if update.message and update.message.message_id:
-                reply_to = update.message.message_id
-                log.info(f"_send_or_edit_message: Attempting to REPLY to incoming message {reply_to} in chat {chat_id}")
-            else:
-                log.info(f"_send_or_edit_message: Sending NEW message to chat {chat_id}")
-            
+            try:
+                result = context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id_to_edit,
+                    text=text,
+                    **kwargs
+                )
+                log.info(f"_send_or_edit_message: Successfully EDITED message {message_id_to_edit}")
+                return result
+            except BadRequest as e:
+                if "message is not modified" in str(e).lower():
+                    log.debug(f"Message {message_id_to_edit} not modified (content unchanged)")
+                    return None
+                log.warning(f"Failed to edit message {message_id_to_edit}: {e}")
+                # Fall through to sending new message
+        
+        # If we have an incoming message to reply to, use reply
+        if update.message:
+            log.info(f"_send_or_edit_message: Attempting to REPLY to incoming message {update.message.message_id} in chat {chat_id}")
             result = context.bot.send_message(
                 chat_id=chat_id,
                 text=text,
-                reply_to_message_id=reply_to,
+                reply_to_message_id=update.message.message_id,
                 **kwargs
             )
-            log.info(f"_send_or_edit_message: Successfully {'REPLIED' if reply_to else 'SENT'} with new message {result.message_id}")
+            log.info(f"_send_or_edit_message: Successfully REPLIED with new message {result.message_id}")
             return result
+        
+        # Otherwise send a new message
+        log.info(f"_send_or_edit_message: Attempting to SEND new message to chat {chat_id}")
+        result = context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            **kwargs
+        )
+        log.info(f"_send_or_edit_message: Successfully SENT new message {result.message_id}")
+        return result
 
+    except RetryAfter as e:
+        log.warning(f"Rate limit hit when sending message to {chat_id}: {e}")
+        time.sleep(e.retry_after)
+        return _send_or_edit_message(update, context, text, **kwargs)  # Retry once after waiting
     except Exception as e:
-        log.error(f"_send_or_edit_message: Error {'editing' if message_id_to_edit else 'sending'} message: {e}", exc_info=True)
-        if message_id_to_edit:
-            log.info("_send_or_edit_message: Edit failed, attempting to send as new message")
-            try:
-                result = context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-                log.info(f"_send_or_edit_message: Successfully sent fallback message {result.message_id}")
-                return result
-            except Exception as e2:
-                log.error(f"_send_or_edit_message: Error sending fallback message: {e2}", exc_info=True)
+        log.error(f"Error sending/editing message to {chat_id}: {e}", exc_info=True)
         return None
 
 def _show_menu_async(update: Update, context: CallbackContext, menu_builder_func):
@@ -374,7 +383,7 @@ def admin_command(update: Update, context: CallbackContext) -> str | int:
     
     if not is_admin(user_id): 
         log.warning(f"Unauthorized attempt to use /admin by UserID={user_id}")
-        context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'unauthorized', lang=lang))
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
         return ConversationHandler.END
     
     log.info(f"Admin user {user_id} showing admin menu.")
@@ -576,7 +585,7 @@ async def process_admin_userbot_password(update: Update, context: CallbackContex
             await _send_or_edit_message(update, context, get_text(user_id, key, lang=lang, **locals_for_format)); clear_conversation_data(context); return ConversationHandler.END
     except Exception as e: log.error(f"Exception during complete_authentication_flow (password) for {phone}: {e}", exc_info=True); context.user_data.pop(CTX_AUTH_DATA, None); await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=html.escape(phone), error=html.escape(str(e)))); clear_conversation_data(context); return ConversationHandler.END
 
-async def process_admin_invite_details(update: Update, context: CallbackContext) -> int:
+def process_admin_invite_details(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
     if not is_admin(user_id):
         _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
