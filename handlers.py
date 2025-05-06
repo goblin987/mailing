@@ -842,7 +842,7 @@ async def task_select_interval(update: Update, context: CallbackContext) -> int:
 async def process_interval_callback(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); task_settings = context.user_data.get(CTX_TASK_SETTINGS)
     if task_settings is None: await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True); return await client_menu(update, context)
-    try: interval_minutes = int(query.data.split(CALLBACK_INTERVAL_PREFIX)[1]); if interval_minutes <= 0: raise ValueError("Interval must be positive")
+    try: interval_minutes = int(query.data.split(CALLBACK_INTERVAL_PREFIX)[1]); interval_minutes = int(query.data.split(CALLBACK_INTERVAL_PREFIX)[1])
     except (ValueError, IndexError, AssertionError): log.error(f"Invalid interval callback data: {query.data}"); await query.answer(get_text(user_id, 'error_invalid_input', lang=lang), show_alert=True); return STATE_TASK_SETUP
     task_settings['repetition_interval'] = interval_minutes; log.info(f"User {user_id} set task interval to {interval_minutes} minutes.")
     if interval_minutes < 60: interval_disp = f"{interval_minutes} min"
