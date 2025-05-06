@@ -339,7 +339,7 @@ async def process_admin_api_id(update: Update, context: CallbackContext) -> str 
     user_id, lang = get_user_id_and_lang(update, context); api_id_str = update.message.text.strip()
     try:
         api_id = int(api_id_str)
-        if api_id <= 0:
+        if api_id <= 0: # Check positivity
             raise ValueError("API ID must be positive")
         context.user_data[CTX_API_ID] = api_id
         log.info(f"Admin {user_id} API ID OK for {context.user_data.get(CTX_PHONE)}")
@@ -426,10 +426,11 @@ async def process_admin_invite_details(update: Update, context: CallbackContext)
     try:
         days = int(match.group(1))
         bots_needed = int(match.group(2))
-        if days <= 0 or bots_needed <= 0: # Corrected this line
+        if days <= 0 or bots_needed <= 0:
             raise ValueError("Days and bots must be positive")
     except (ValueError, AssertionError):
-        await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_numbers', lang=lang)); return STATE_WAITING_FOR_SUB_DETAILS
+        await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_numbers', lang=lang))
+        return STATE_WAITING_FOR_SUB_DETAILS
     await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_generating', lang=lang)); code = str(uuid.uuid4().hex)[:8]
     end_datetime = datetime.now(UTC_TZ) + timedelta(days=days); sub_end_ts = int(end_datetime.timestamp())
     if db.create_invitation(code, sub_end_ts): end_date_str = format_dt(sub_end_ts, fmt='%Y-%m-%d %H:%M UTC'); db.log_event_db("Invite Generated", f"Code: {code}, Days: {days}, Bot Count: {bots_needed}", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_success', lang=lang, code=code, end_date=end_date_str, count=bots_needed))
@@ -447,10 +448,11 @@ async def process_admin_extend_days(update: Update, context: CallbackContext) ->
     if not code: await _send_or_edit_message(update, context, get_text(user_id, 'session_expired', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
     try:
         days_to_add = int(days_str)
-        if days_to_add <= 0: # Corrected this line
+        if days_to_add <= 0:
             raise ValueError("Days must be positive")
     except (ValueError, AssertionError):
-        await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_days', lang=lang)); return STATE_WAITING_FOR_EXTEND_DAYS
+        await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_days', lang=lang))
+        return STATE_WAITING_FOR_EXTEND_DAYS
     client = db.find_client_by_code(code)
     if not client: await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_code', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
     current_end_ts = client['subscription_end']; now_ts = int(datetime.now(UTC_TZ).timestamp()); start_ts = max(now_ts, current_end_ts)
@@ -470,7 +472,7 @@ async def process_admin_add_bots_count(update: Update, context: CallbackContext)
     if not code: await _send_or_edit_message(update, context, get_text(user_id, 'session_expired', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
     try:
         count_to_add = int(count_str)
-        if count_to_add <= 0: # Corrected this line
+        if count_to_add <= 0:
             raise ValueError("Count must be positive")
     except (ValueError, AssertionError):
         await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_invalid_count', lang=lang)); return STATE_WAITING_FOR_ADD_USERBOTS_COUNT
@@ -513,10 +515,17 @@ async def process_folder_name(update: Update, context: CallbackContext) -> int:
 
 async def client_select_folder_to_edit_or_delete(update: Update, context: CallbackContext, action: str) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context);
-    try: _, page_data = query.data.split('?', 1); current_page = int(page_data.split('=')[1])
+    try:
+        current_page = 0
+        if '?' in query.data: # Check if query params exist
+            _, page_data = query.data.split('?', 1)
+            current_page = int(page_data.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     folders = db.get_folders_by_user(user_id)
-    if not folders: if query and hasattr(query, 'answer'): await query.answer(get_text(user_id, 'folder_no_folders', lang=lang), show_alert=True); return await client_folder_menu(update, context)
+    if not folders:
+        if query and hasattr(query, 'answer'):
+            await query.answer(get_text(user_id, 'folder_no_folders', lang=lang), show_alert=True)
+        return await client_folder_menu(update, context)
     total_items = len(folders); start_index = current_page * ITEMS_PER_PAGE; end_index = start_index + ITEMS_PER_PAGE; folders_page = folders[start_index:end_index]
     text_key = 'folder_select_edit' if action == 'edit' else 'folder_select_delete'; text = get_text(user_id, text_key, lang=lang); keyboard = []
     for folder in folders_page: button_text = html.escape(folder['name']); callback_action = "edit_selected" if action == 'edit' else "delete_selected"; callback_data = f"{CALLBACK_FOLDER_PREFIX}{callback_action}?id={folder['id']}"; keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
@@ -530,10 +539,13 @@ async def client_show_folder_edit_options(update: Update, context: CallbackConte
          try: _, params = query.data.split('?', 1); folder_id = int(params.split('=')[1]); context.user_data[CTX_FOLDER_ID] = folder_id
          except (ValueError, IndexError): folder_id = None
     if not folder_id: log.error(f"Could not determine folder ID for edit options. User: {user_id}, Callback: {query.data if query else 'N/A'}");
-    if query and hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True); return await client_folder_menu(update, context)
+    # This check was problematic, if query is None, it would fail.
+    # The actual error handling for missing folder_id is better done after trying to get folder_name
+    # if query and hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True); return await client_folder_menu(update, context)
     folder_name = db.get_folder_name(folder_id)
     if not folder_name:
-        if query and hasattr(query, 'answer'): await query.answer(get_text(user_id, 'folder_not_found_error', lang=lang), show_alert=True); clear_conversation_data(context); return await client_folder_menu(update, context)
+        if query and hasattr(query, 'answer'): await query.answer(get_text(user_id, 'folder_not_found_error', lang=lang), show_alert=True)
+        clear_conversation_data(context); return await client_folder_menu(update, context)
     context.user_data[CTX_FOLDER_NAME] = folder_name; groups_in_folder = db.get_target_groups_details_by_folder(folder_id)
     text = get_text(user_id, 'folder_edit_title', lang=lang, name=html.escape(folder_name)) + "\n" + get_text(user_id, 'folder_edit_groups_intro', lang=lang)
     if groups_in_folder:
@@ -585,7 +597,10 @@ async def process_folder_links(update: Update, context: CallbackContext) -> int:
 async def client_select_groups_to_remove(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); folder_id = context.user_data.get(CTX_FOLDER_ID); folder_name = context.user_data.get(CTX_FOLDER_NAME)
     if not folder_id or not folder_name: await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True); return await client_folder_menu(update, context)
-    try: _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
+    try:
+        current_page = 0
+        if '?' in query.data:
+            _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     groups = db.get_target_groups_details_by_folder(folder_id)
     if not groups: await query.answer(get_text(user_id, 'folder_edit_no_groups', lang=lang), show_alert=True); return await client_show_folder_edit_options(update, context)
@@ -852,7 +867,10 @@ async def task_select_target_type(update: Update, context: CallbackContext) -> i
 
 async def task_select_folder_for_target(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-    try: _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
+    try:
+        current_page = 0
+        if '?' in query.data:
+            _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     folders = db.get_folders_by_user(user_id)
     if not folders: await query.answer(get_text(user_id, 'task_error_no_folders', lang=lang), show_alert=True); return await task_select_target_type(update, context)
@@ -944,22 +962,22 @@ async def admin_select_userbot_to_remove(update: Update, context: CallbackContex
     await _send_or_edit_message(update, context, text, reply_markup=markup); return STATE_ADMIN_CONFIRM_USERBOT_RESET
 
 async def admin_confirm_remove_userbot(update: Update, context: CallbackContext) -> int:
-     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
+     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); query_id = query.id
      phone_to_remove = None
      try:
          phone_to_remove = query.data.split(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirm_")[1]
      except IndexError:
          log.error(f"Could not parse phone from remove confirm callback: {query.data}")
-         if hasattr(query, 'answer') and not context.bot_data.get(f'answered_{query.id}', False):
+         if query_id and not context.bot_data.get(f'answered_{query_id}', False):
              await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-             context.bot_data[f'answered_{query.id}'] = True
+             context.bot_data[f'answered_{query_id}'] = True
          return admin_command(update, context)
 
      bot_info = db.find_userbot(phone_to_remove)
      if not bot_info:
-         if hasattr(query, 'answer') and not context.bot_data.get(f'answered_{query.id}', False):
+         if query_id and not context.bot_data.get(f'answered_{query_id}', False):
              await query.answer(get_text(user_id, 'admin_userbot_not_found', lang=lang), show_alert=True)
-             context.bot_data[f'answered_{query.id}'] = True
+             context.bot_data[f'answered_{query_id}'] = True
          return admin_command(update, context)
      username = bot_info['username']; display_name = html.escape(f"@{username}" if username else phone_to_remove)
      text = get_text(user_id, 'admin_userbot_remove_confirm_text', lang=lang, display_name=display_name)
@@ -967,15 +985,15 @@ async def admin_confirm_remove_userbot(update: Update, context: CallbackContext)
      await _send_or_edit_message(update, context, text, reply_markup=markup); return STATE_ADMIN_CONFIRM_USERBOT_RESET
 
 async def admin_remove_userbot_confirmed(update: Update, context: CallbackContext) -> int:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
+    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); query_id = query.id
     phone_to_remove = None
     try:
         phone_to_remove = query.data.split(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_")[1]
     except IndexError:
         log.error(f"Could not parse phone from remove confirmed callback: {query.data}");
-        if hasattr(query, 'answer') and not context.bot_data.get(f'answered_{query.id}', False):
+        if query_id and not context.bot_data.get(f'answered_{query_id}', False):
             await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
-            context.bot_data[f'answered_{query.id}'] = True
+            context.bot_data[f'answered_{query_id}'] = True
         return admin_command(update, context)
     bot_info = db.find_userbot(phone_to_remove); display_name = "N/A";
     if bot_info: display_name = html.escape(f"@{bot_info['username']}" if bot_info['username'] else phone_to_remove)
