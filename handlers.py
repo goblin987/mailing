@@ -166,12 +166,18 @@ async def _show_menu_async(update: Update, context: CallbackContext, menu_builde
     message, markup, parse_mode = menu_builder_func(user_id, context)
     await _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode)
 
-async def error_handler(update: object, context: CallbackContext) -> None:
+# **MODIFIED HERE: Changed from async def to def**
+def error_handler(update: object, context: CallbackContext) -> None:
+    """Log Errors caused by Updates and send a user-friendly message."""
     log.error(f"Exception while handling an update:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_chat:
-        user_id, lang = get_user_id_and_lang(update, context)
-        error_message = get_text(user_id, 'error_generic', lang=lang)
+        user_id, lang = get_user_id_and_lang(update, context) # Ensure lang is fetched
+        error_message = get_text(user_id, 'error_generic', lang=lang) # Use fetched lang
+        # Use run_async to schedule the coroutine from this synchronous handler
         context.dispatcher.run_async(_send_or_edit_message, update, context, error_message)
+    elif isinstance(update, str): # Sometimes update is a string, e.g. in job context
+        log.error(f"Error handler received string update: {update}")
+        # Cannot send message back to user if we don't have chat_id.
 
 def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> str:
     if not timestamp: return get_text(0, 'task_value_not_set', lang='en')
@@ -1221,7 +1227,7 @@ main_conversation = ConversationHandler(
         STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename)],
         STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_links)],
+        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_links)], # Used by both folder edit & join selected bot
         STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'primary'))],
@@ -1232,10 +1238,10 @@ main_conversation = ConversationHandler(
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private),
-        CommandHandler('start', start_command, filters=Filters.chat_type.private),
-        CommandHandler('admin', admin_command, filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)),
-        CallbackQueryHandler(main_callback_handler),
-        MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, conversation_fallback),
+        CommandHandler('start', start_command, filters=Filters.chat_type.private), # Allow /start to break out
+        CommandHandler('admin', admin_command, filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)), # Allow /admin to break out
+        CallbackQueryHandler(main_callback_handler), # Route unhandled callbacks to main router if possible
+        MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, conversation_fallback), # Generic fallback for unexpected text
     ],
     allow_reentry=True,
     name="main_conversation",
