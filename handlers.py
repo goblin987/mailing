@@ -67,7 +67,8 @@ CTX_TASK_SETTINGS = "task_settings" # Dict to hold settings during setup
 CTX_PAGE = "page" # For pagination
 CTX_MESSAGE_ID = "message_id" # To store the ID of the message being edited
 
-# --- Helper Functions --- (Keep as is) ...
+# --- Helper Functions ---
+
 def clear_conversation_data(context: CallbackContext):
     """Clears volatile keys from user_data, preserving user_id and lang."""
     if not hasattr(context, 'user_data') or context.user_data is None:
@@ -129,10 +130,11 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
             # Answer callback query silently first
             try:
                 # Check if already answered before answering again
+                # Check existence of 'answered' attribute for safety
                 if hasattr(query, 'answered') and not query.answered:
                     await query.answer()
                 answered_callback = True
-            except (BadRequest, TelegramError) as cb_e:
+            except (AttributeError, BadRequest, TelegramError) as cb_e: # Catch AttributeError too
                 log.debug(f"Ignoring callback answer error: {cb_e}")
 
             # Use the message_id from the callback query's message
@@ -205,38 +207,31 @@ async def error_handler(update: object, context: CallbackContext) -> None:
         error_message = "An internal error occurred. Please try again later."
         try: error_message = get_text(user_id, 'error_generic', lang=lang)
         except Exception: pass
-        await _send_or_edit_message(update, context, error_message)
+        await _send_or_edit_message(update, context, error_message) # Use internal helper
     if hasattr(context, 'user_data'):
          clear_conversation_data(context)
 
 
 # --- Format Timestamp Helper ---
 def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> str:
-    """Formats a UTC timestamp into a human-readable string in a specific timezone."""
-    if not timestamp: return get_text(0, 'task_value_not_set', lang='en') # Use key for N/A
+    if not timestamp: return get_text(0, 'task_value_not_set', lang='en')
     try: dt_utc = datetime.fromtimestamp(timestamp, UTC_TZ); dt_local = dt_utc.astimezone(tz); return dt_local.strftime(fmt)
     except (ValueError, TypeError, OSError): log.warning(f"Could not format invalid timestamp: {timestamp}"); return "Invalid Date"
 
-# --- Menu Builders (remain synchronous) ---
+# --- Menu Builders ---
 def build_client_menu(user_id, context: CallbackContext):
-    """Builds the client menu message and keyboard."""
     client_info = db.find_client_by_user_id(user_id); lang = context.user_data.get(CTX_LANG, 'en') if context.user_data else 'en'
     if not client_info: return get_text(user_id, 'unknown_user', lang=lang), None, ParseMode.HTML
     code = client_info['invitation_code']; sub_end_ts = client_info['subscription_end']; now_ts = int(datetime.now(UTC_TZ).timestamp())
-    is_expired = sub_end_ts < now_ts; end_date = format_dt(sub_end_ts, fmt='%Y-%m-%d') if sub_end_ts else 'N/A'
-    expiry_warning = " ⚠️ <b>Expired</b>" if is_expired else ""
+    is_expired = sub_end_ts < now_ts; end_date = format_dt(sub_end_ts, fmt='%Y-%m-%d') if sub_end_ts else 'N/A'; expiry_warning = " ⚠️ <b>Expired</b>" if is_expired else ""
     userbot_phones = db.get_client_bots(user_id); bot_count = len(userbot_phones); parse_mode = ParseMode.HTML
     menu_text = f"<b>{get_text(user_id, 'client_menu_title', lang=lang, code=html.escape(code))}</b>{expiry_warning}\n"
-    menu_text += get_text(user_id, 'client_menu_sub_end', lang=lang, end_date=end_date) + "\n\n"
-    menu_text += f"<u>{get_text(user_id, 'client_menu_userbots_title', lang=lang, count=bot_count)}</u>\n"
+    menu_text += get_text(user_id, 'client_menu_sub_end', lang=lang, end_date=end_date) + "\n\n" + f"<u>{get_text(user_id, 'client_menu_userbots_title', lang=lang, count=bot_count)}</u>\n"
     if userbot_phones:
         for i, phone in enumerate(userbot_phones, 1):
-            bot_db_info = db.find_userbot(phone)
-            username = bot_db_info['username'] if bot_db_info else None; status = bot_db_info['status'].capitalize() if bot_db_info else 'Unknown'
+            bot_db_info = db.find_userbot(phone); username = bot_db_info['username'] if bot_db_info else None; status = bot_db_info['status'].capitalize() if bot_db_info else 'Unknown'
             last_error = bot_db_info['last_error'] if bot_db_info else None; display_name = html.escape(f"@{username}" if username else phone)
-            status_icon = "🟢" if bot_db_info and bot_db_info['status'] == 'active' else \
-                          "🟡" if bot_db_info and bot_db_info['status'] not in ['active', 'inactive', 'error'] else \
-                          "🔴" if bot_db_info and bot_db_info['status'] == 'error' else "⚪️"
+            status_icon = "🟢" if bot_db_info and bot_db_info['status'] == 'active' else "🟡" if bot_db_info and bot_db_info['status'] not in ['active', 'inactive', 'error'] else "🔴" if bot_db_info and bot_db_info['status'] == 'error' else "⚪️"
             menu_text += f"{i}. {status_icon} {display_name} (<i>Status: {html.escape(status)}</i>)\n"
             if last_error: escaped_error = html.escape(last_error); menu_text += f"  └─ <pre>Error: {escaped_error[:100]}{'...' if len(escaped_error)>100 else ''}</pre>\n"
     else: menu_text += get_text(user_id, 'client_menu_no_userbots', lang=lang) + "\n"
@@ -244,13 +239,10 @@ def build_client_menu(user_id, context: CallbackContext):
     markup = InlineKeyboardMarkup(keyboard); return menu_text, markup, parse_mode
 
 def build_admin_menu(user_id, context: CallbackContext):
-    """Builds the admin menu message and keyboard."""
-    lang = context.user_data.get(CTX_LANG, 'en') if context.user_data else 'en'
-    title = f"<b>{get_text(user_id, 'admin_panel_title', lang=lang)}</b>"; parse_mode = ParseMode.HTML
+    lang = context.user_data.get(CTX_LANG, 'en') if context.user_data else 'en'; title = f"<b>{get_text(user_id, 'admin_panel_title', lang=lang)}</b>"; parse_mode = ParseMode.HTML
     keyboard = [ [ InlineKeyboardButton(get_text(user_id, 'admin_button_add_userbot', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}add_bot_prompt"), InlineKeyboardButton(get_text(user_id, 'admin_button_remove_userbot', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}remove_bot_select?page=0") ], [InlineKeyboardButton(get_text(user_id, 'admin_button_list_userbots', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}list_bots?page=0")], [InlineKeyboardButton(get_text(user_id, 'admin_button_gen_invite', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}gen_invite_prompt")], [InlineKeyboardButton(get_text(user_id, 'admin_button_view_subs', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_subs?page=0")], [ InlineKeyboardButton(get_text(user_id, 'admin_button_extend_sub', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}extend_sub_prompt"), InlineKeyboardButton(get_text(user_id, 'admin_button_assign_bots_client', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}assign_bots_prompt") ], [InlineKeyboardButton(get_text(user_id, 'admin_button_view_logs', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_logs?page=0")], ]
     markup = InlineKeyboardMarkup(keyboard); return title, markup, parse_mode
 
-# --- Utility for Pagination ---
 def build_pagination_buttons(base_callback_data: str, current_page: int, total_items: int, items_per_page: int) -> list:
     buttons = []; total_pages = math.ceil(total_items / items_per_page)
     if total_pages <= 1: return []
@@ -264,10 +256,7 @@ def build_pagination_buttons(base_callback_data: str, current_page: int, total_i
 # --- Command Handlers (async def) ---
 
 async def start_command(update: Update, context: CallbackContext) -> str | int:
-    """Handles /start: directs users based on status."""
-    user_id, lang = get_user_id_and_lang(update, context)
-    clear_conversation_data(context)
-    log.info(f"Start cmd: UserID={user_id}, User={update.effective_user.username}")
+    user_id, lang = get_user_id_and_lang(update, context); clear_conversation_data(context); log.info(f"Start cmd: UserID={user_id}, User={update.effective_user.username}")
     if is_admin(user_id): log.info(f"Admin user {user_id} used /start, showing admin menu."); return await admin_command(update, context)
     client_info = db.find_client_by_user_id(user_id)
     if client_info:
@@ -277,37 +266,23 @@ async def start_command(update: Update, context: CallbackContext) -> str | int:
     else: await _send_or_edit_message(update, context, get_text(user_id, 'welcome', lang=lang)); return STATE_WAITING_FOR_CODE
 
 async def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
-    """Handles the user sending an invitation code."""
-    user_id, lang = get_user_id_and_lang(update, context)
-    code = update.message.text.strip().lower()
-    log.info(f"UserID={user_id} submitted code: {code}")
+    user_id, lang = get_user_id_and_lang(update, context); code = update.message.text.strip().lower(); log.info(f"UserID={user_id} submitted code: {code}")
     if not re.fullmatch(r'[a-f0-9]{8}', code): await _send_or_edit_message(update, context, get_text(user_id, 'invalid_code_format', lang=lang)); return STATE_WAITING_FOR_CODE
     success, status_key = db.activate_client(code, user_id); text_to_send = get_text(user_id, status_key, lang=lang)
-    if success:
-        log.info(f"Activated client {user_id} code {code}"); db.log_event_db("Client Activated", f"Code: {code}", user_id=user_id)
-        context.user_data[CTX_LANG] = db.get_user_language(user_id); lang = context.user_data[CTX_LANG]
-        await _send_or_edit_message(update, context, text_to_send)
-        return await client_menu(update, context)
+    if success: log.info(f"Activated client {user_id} code {code}"); db.log_event_db("Client Activated", f"Code: {code}", user_id=user_id); context.user_data[CTX_LANG] = db.get_user_language(user_id); lang = context.user_data[CTX_LANG]; await _send_or_edit_message(update, context, text_to_send); return await client_menu(update, context)
     else: log.warning(f"Failed activation user {user_id} code {code}: {status_key}"); await _send_or_edit_message(update, context, text_to_send); clear_conversation_data(context); return ConversationHandler.END
 
 async def admin_command(update: Update, context: CallbackContext) -> str | int:
-    """Handles the /admin command for authorized admins."""
     user_id, lang = get_user_id_and_lang(update, context); clear_conversation_data(context); log.info(f"Admin cmd: UserID={user_id}, User={update.effective_user.username}")
     if not is_admin(user_id): await _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang)); return ConversationHandler.END
-    title, markup, parse_mode = build_admin_menu(user_id, context)
-    await _send_or_edit_message(update, context, title, reply_markup=markup, parse_mode=parse_mode); return ConversationHandler.END
+    title, markup, parse_mode = build_admin_menu(user_id, context); await _send_or_edit_message(update, context, title, reply_markup=markup, parse_mode=parse_mode); return ConversationHandler.END
 
 async def cancel_command(update: Update, context: CallbackContext) -> int:
-    """Generic cancel handler."""
-    user_id, lang = get_user_id_and_lang(update, context); log.info(f"Cancel cmd: UserID={user_id}")
-    current_state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') if context.user_data else 'None'
-    log.debug(f"Cancel called from state: {current_state}")
+    user_id, lang = get_user_id_and_lang(update, context); log.info(f"Cancel cmd: UserID={user_id}"); current_state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') if context.user_data else 'None'; log.debug(f"Cancel called from state: {current_state}")
     await _send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
 
 async def conversation_fallback(update: Update, context: CallbackContext) -> int:
-     """Handles messages not matched in a conversation state."""
-     user_id, lang = get_user_id_and_lang(update, context)
-     state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') if context.user_data else 'None'
+     user_id, lang = get_user_id_and_lang(update, context); state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') if context.user_data else 'None'
      msg_text = update.effective_message.text if update.effective_message else 'Non-text update'; log.warning(f"Conv fallback: UserID={user_id}. State={state}. Msg='{msg_text[:50]}...'")
      if update.message and update.message.text and update.message.text.startswith('/'):
          if update.message.text == '/cancel': return await cancel_command(update, context)
@@ -317,24 +292,19 @@ async def conversation_fallback(update: Update, context: CallbackContext) -> int
 
 # --- Main Menu & Language ---
 async def client_menu(update: Update, context: CallbackContext) -> int:
-    """Builds and sends the main client menu."""
     user_id, lang = get_user_id_and_lang(update, context)
     if update.callback_query: clear_conversation_data(context); lang = context.user_data.get(CTX_LANG, 'en')
-    message, markup, parse_mode = build_client_menu(user_id, context)
-    await _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode); return ConversationHandler.END
+    message, markup, parse_mode = build_client_menu(user_id, context); await _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode); return ConversationHandler.END
 
-async def client_ask_select_language(update: Update, context: CallbackContext) -> int: # Return state
-    """Shows language selection buttons."""
+async def client_ask_select_language(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); buttons = []; row = []; sorted_languages = sorted(language_names.items(), key=lambda item: item[1])
     for code, name in sorted_languages: row.append(InlineKeyboardButton(name, callback_data=f"{CALLBACK_LANG_PREFIX}{code}"));
     if len(row) >= 2: buttons.append(row); row = []
     if row: buttons.append(row)
-    buttons.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")])
-    markup = InlineKeyboardMarkup(buttons)
+    buttons.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")]); markup = InlineKeyboardMarkup(buttons)
     await _send_or_edit_message(update, context, get_text(user_id, 'select_language', lang=lang), reply_markup=markup); return ConversationHandler.END
 
-async def set_language_handler(update: Update, context: CallbackContext) -> int: # Return state
-    """Handles language selection callback."""
+async def set_language_handler(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id = query.from_user.id; lang_code = query.data.split(CALLBACK_LANG_PREFIX)[1]; current_lang = context.user_data.get(CTX_LANG, 'en')
     async def answer_callback_task(text, show_alert=False):
         try:
@@ -369,12 +339,11 @@ async def process_admin_api_hash(update: Update, context: CallbackContext) -> st
     log.info(f"Admin {user_id} API Hash OK for {phone}. Starting authentication flow.")
     await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_connecting', lang=lang, phone=phone))
     try:
-        auth_status, auth_data = await telethon_api.start_authentication_flow(phone, api_id, api_hash)
-        log.info(f"Authentication start result for {phone}: Status='{auth_status}'")
+        auth_status, auth_data = await telethon_api.start_authentication_flow(phone, api_id, api_hash); log.info(f"Authentication start result for {phone}: Status='{auth_status}'")
         if auth_status == 'code_needed': context.user_data[CTX_AUTH_DATA] = auth_data; await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_prompt_code', lang=lang, phone=phone)); return STATE_WAITING_FOR_CODE_USERBOT
         elif auth_status == 'password_needed': context.user_data[CTX_AUTH_DATA] = auth_data; await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_prompt_password', lang=lang, phone=phone)); return STATE_WAITING_FOR_PASSWORD
         elif auth_status == 'already_authorized':
-             log.warning(f"Userbot {phone} is already authorized.")
+             log.warning(f"Userbot {phone} is already authorized.");
              if not db.find_userbot(phone):
                  safe_phone_part = re.sub(r'[^\d]', '', phone); session_file_rel = f"{safe_phone_part or f'unknown_{random.randint(1000,9999)}'}.session"
                  db.add_userbot(phone, session_file_rel, api_id, api_hash, 'active')
@@ -382,16 +351,13 @@ async def process_admin_api_hash(update: Update, context: CallbackContext) -> st
              asyncio.create_task(telethon_api.get_userbot_runtime_info(phone))
              await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_already_auth', lang=lang, display_name=phone)); clear_conversation_data(context); return ConversationHandler.END
         else:
-            error_msg = auth_data.get('error_message', 'Unknown error'); log.error(f"Auth start error for {phone}: {error_msg}")
-            locals_for_format = {'phone': phone, 'error': error_msg}; key = 'admin_userbot_auth_error_unknown'
+            error_msg = auth_data.get('error_message', 'Unknown error'); log.error(f"Auth start error for {phone}: {error_msg}"); locals_for_format = {'phone': phone, 'error': error_msg}; key = 'admin_userbot_auth_error_unknown'
             if "flood wait" in error_msg.lower(): key = 'admin_userbot_auth_error_flood'; locals_for_format['seconds'] = re.search(r'\d+', error_msg).group(0) if re.search(r'\d+', error_msg) else '?'
             elif "config" in error_msg.lower() or "invalid api" in error_msg.lower(): key = 'admin_userbot_auth_error_config'
             elif "invalid phone" in error_msg.lower(): key = 'admin_userbot_auth_error_phone_invalid'
             elif "connection" in error_msg.lower(): key = 'admin_userbot_auth_error_connect'
             await _send_or_edit_message(update, context, get_text(user_id, key, lang=lang, **locals_for_format)); clear_conversation_data(context); return ConversationHandler.END
-    except Exception as e:
-        log.error(f"Exception during start_authentication_flow for {phone}: {e}", exc_info=True)
-        await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); clear_conversation_data(context); return ConversationHandler.END
+    except Exception as e: log.error(f"Exception during start_authentication_flow for {phone}: {e}", exc_info=True); await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); clear_conversation_data(context); return ConversationHandler.END
 
 async def process_admin_userbot_code(update: Update, context: CallbackContext) -> str | int:
     user_id, lang = get_user_id_and_lang(update, context); code = update.message.text.strip(); auth_data = context.user_data.get(CTX_AUTH_DATA)
@@ -410,19 +376,15 @@ async def process_admin_userbot_code(update: Update, context: CallbackContext) -
             else: log.error(f"Auth OK for {phone_num}, but DB add/update failed.")
             await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_add_success', lang=lang, display_name=display_name))
             asyncio.create_task(telethon_api.get_userbot_runtime_info(phone_num)); clear_conversation_data(context); return ConversationHandler.END
-        elif comp_status == 'error' and "Password required" in comp_data.get('error_message','').lower():
-             await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_password_needed_unexpected', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
+        elif comp_status == 'error' and "Password required" in comp_data.get('error_message','').lower(): await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_password_needed_unexpected', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
         else:
-            error_msg = comp_data.get('error_message', 'Unknown error.'); log.error(f"Auth code completion error for {phone}: {error_msg}"); locals_for_format = {'phone': phone, 'error': error_msg}
-            key = 'admin_userbot_auth_error_unknown'
+            error_msg = comp_data.get('error_message', 'Unknown error.'); log.error(f"Auth code completion error for {phone}: {error_msg}"); locals_for_format = {'phone': phone, 'error': error_msg}; key = 'admin_userbot_auth_error_unknown'
             if "invalid or expired code" in error_msg.lower(): key = 'admin_userbot_auth_error_code_invalid'
             elif "flood wait" in error_msg.lower(): key = 'admin_userbot_auth_error_flood'; locals_for_format['seconds'] = re.search(r'\d+', error_msg).group(0) if re.search(r'\d+', error_msg) else '?'
             elif "banned" in error_msg.lower() or "deactivated" in error_msg.lower(): key = 'admin_userbot_auth_error_account_issue'
             elif "connection" in error_msg.lower(): key = 'admin_userbot_auth_error_connect'
             await _send_or_edit_message(update, context, get_text(user_id, key, lang=lang, **locals_for_format)); clear_conversation_data(context); return ConversationHandler.END
-    except Exception as e:
-        log.error(f"Exception during complete_authentication_flow (code) for {phone}: {e}", exc_info=True); context.user_data.pop(CTX_AUTH_DATA, None)
-        await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); clear_conversation_data(context); return ConversationHandler.END
+    except Exception as e: log.error(f"Exception during complete_authentication_flow (code) for {phone}: {e}", exc_info=True); context.user_data.pop(CTX_AUTH_DATA, None); await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); clear_conversation_data(context); return ConversationHandler.END
 
 async def process_admin_userbot_password(update: Update, context: CallbackContext) -> str | int:
     user_id, lang = get_user_id_and_lang(update, context); password = update.message.text.strip(); auth_data = context.user_data.get(CTX_AUTH_DATA)
@@ -442,18 +404,15 @@ async def process_admin_userbot_password(update: Update, context: CallbackContex
             await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_add_success', lang=lang, display_name=display_name))
             asyncio.create_task(telethon_api.get_userbot_runtime_info(phone_num)); clear_conversation_data(context); return ConversationHandler.END
         else:
-            error_msg = comp_data.get('error_message', 'Unknown error.'); log.error(f"Auth password completion error for {phone}: {error_msg}"); locals_for_format = {'phone': phone, 'error': error_msg}
-            key = 'admin_userbot_auth_error_unknown'
+            error_msg = comp_data.get('error_message', 'Unknown error.'); log.error(f"Auth password completion error for {phone}: {error_msg}"); locals_for_format = {'phone': phone, 'error': error_msg}; key = 'admin_userbot_auth_error_unknown'
             if "incorrect password" in error_msg.lower() or "password_hash_invalid" in error_msg.lower(): key = 'admin_userbot_auth_error_password_invalid'
             elif "flood wait" in error_msg.lower(): key = 'admin_userbot_auth_error_flood'; locals_for_format['seconds'] = re.search(r'\d+', error_msg).group(0) if re.search(r'\d+', error_msg) else '?'
             elif "banned" in error_msg.lower() or "deactivated" in error_msg.lower(): key = 'admin_userbot_auth_error_account_issue'
             elif "connection" in error_msg.lower(): key = 'admin_userbot_auth_error_connect'
             await _send_or_edit_message(update, context, get_text(user_id, key, lang=lang, **locals_for_format)); clear_conversation_data(context); return ConversationHandler.END
-    except Exception as e:
-        log.error(f"Exception during complete_authentication_flow (password) for {phone}: {e}", exc_info=True); context.user_data.pop(CTX_AUTH_DATA, None)
-        await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); clear_conversation_data(context); return ConversationHandler.END
+    except Exception as e: log.error(f"Exception during complete_authentication_flow (password) for {phone}: {e}", exc_info=True); context.user_data.pop(CTX_AUTH_DATA, None); await _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_auth_error_unknown', lang=lang, phone=phone, error=str(e))); clear_conversation_data(context); return ConversationHandler.END
 
-# --- Admin - Other Flows ---
+# --- Admin - Other Flows --- (Keep async) ...
 async def process_admin_invite_details(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); details_text = update.message.text.strip().lower(); match = re.match(r'(\d+)\s*d\s+(\d+)\s*b', details_text)
     if not match: await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_format', lang=lang)); return STATE_WAITING_FOR_SUB_DETAILS
@@ -461,15 +420,12 @@ async def process_admin_invite_details(update: Update, context: CallbackContext)
     except (ValueError, AssertionError): await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_numbers', lang=lang)); return STATE_WAITING_FOR_SUB_DETAILS
     await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_generating', lang=lang)); code = str(uuid.uuid4().hex)[:8]
     end_datetime = datetime.now(UTC_TZ) + timedelta(days=days); sub_end_ts = int(end_datetime.timestamp())
-    if db.create_invitation(code, sub_end_ts):
-        end_date_str = format_dt(sub_end_ts, fmt='%Y-%m-%d %H:%M UTC'); db.log_event_db("Invite Generated", f"Code: {code}, Days: {days}, Bot Count: {bots_needed}", user_id=user_id)
-        await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_success', lang=lang, code=code, end_date=end_date_str, count=bots_needed))
+    if db.create_invitation(code, sub_end_ts): end_date_str = format_dt(sub_end_ts, fmt='%Y-%m-%d %H:%M UTC'); db.log_event_db("Invite Generated", f"Code: {code}, Days: {days}, Bot Count: {bots_needed}", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_success', lang=lang, code=code, end_date=end_date_str, count=bots_needed))
     else: db.log_event_db("Invite Gen Failed", f"Code: {code} (duplicate?)", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_db_error', lang=lang))
     clear_conversation_data(context); return ConversationHandler.END
 
 async def process_admin_extend_code(update: Update, context: CallbackContext) -> int:
-    user_id, lang = get_user_id_and_lang(update, context); code = update.message.text.strip().lower()
-    client = db.find_client_by_code(code)
+    user_id, lang = get_user_id_and_lang(update, context); code = update.message.text.strip().lower(); client = db.find_client_by_code(code)
     if not client: await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_code', lang=lang)); return STATE_WAITING_FOR_EXTEND_CODE
     context.user_data[CTX_EXTEND_CODE] = code; end_date_str = format_dt(client['subscription_end'])
     await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_prompt_days', lang=lang, code=code, end_date=end_date_str)); return STATE_WAITING_FOR_EXTEND_DAYS
@@ -483,18 +439,14 @@ async def process_admin_extend_days(update: Update, context: CallbackContext) ->
     if not client: await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_code', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
     current_end_ts = client['subscription_end']; now_ts = int(datetime.now(UTC_TZ).timestamp()); start_ts = max(now_ts, current_end_ts)
     start_dt = datetime.fromtimestamp(start_ts, UTC_TZ); new_end_dt = start_dt + timedelta(days=days_to_add); new_end_ts = int(new_end_dt.timestamp())
-    if db.extend_subscription(code, new_end_ts):
-        new_end_date_str = format_dt(new_end_ts); db.log_event_db("Subscription Extended", f"Code: {code}, Added: {days_to_add} days", user_id=user_id, client_id=client.get('user_id'))
-        await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_success', lang=lang, code=code, days=days_to_add, new_end_date=new_end_date_str))
+    if db.extend_subscription(code, new_end_ts): new_end_date_str = format_dt(new_end_ts); db.log_event_db("Subscription Extended", f"Code: {code}, Added: {days_to_add} days", user_id=user_id, client_id=client.get('user_id')); await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_success', lang=lang, code=code, days=days_to_add, new_end_date=new_end_date_str))
     else: db.log_event_db("Sub Extend Failed", f"Code: {code}", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_db_error', lang=lang))
     clear_conversation_data(context); return ConversationHandler.END
 
 async def process_admin_add_bots_code(update: Update, context: CallbackContext) -> int:
-    user_id, lang = get_user_id_and_lang(update, context); code = update.message.text.strip().lower()
-    client = db.find_client_by_code(code)
+    user_id, lang = get_user_id_and_lang(update, context); code = update.message.text.strip().lower(); client = db.find_client_by_code(code)
     if not client: await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_invalid_code', lang=lang)); return STATE_WAITING_FOR_ADD_USERBOTS_CODE
-    context.user_data[CTX_ADD_BOTS_CODE] = code
-    current_bots = db.get_client_bots(client.get('user_id')) if client.get('user_id') else [b['phone_number'] for b in db.get_all_userbots(assigned_status=True) if b['assigned_client'] == code]
+    context.user_data[CTX_ADD_BOTS_CODE] = code; current_bots = db.get_client_bots(client.get('user_id')) if client.get('user_id') else [b['phone_number'] for b in db.get_all_userbots(assigned_status=True) if b['assigned_client'] == code]
     current_count = len(current_bots)
     await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_prompt_count', lang=lang, code=code, current_count=current_count)); return STATE_WAITING_FOR_ADD_USERBOTS_COUNT
 
@@ -506,15 +458,11 @@ async def process_admin_add_bots_count(update: Update, context: CallbackContext)
     available_bots = db.get_unassigned_userbots(limit=count_to_add)
     if len(available_bots) < count_to_add: await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_no_bots_available', lang=lang, needed=count_to_add, available=len(available_bots))); clear_conversation_data(context); return ConversationHandler.END
     success, message = db.assign_userbots_to_client(code, available_bots)
-    if success:
-        client_user_id = db.find_client_by_code(code)['user_id'] if db.find_client_by_code(code) else None
-        db.log_event_db("Userbots Assigned", f"Code: {code}, Count: {len(available_bots)}, Bots: {','.join(available_bots)}", user_id=user_id, client_id=client_user_id)
-        assigned_count_match = re.search(r"Successfully assigned (\d+) userbots", message)
-        if assigned_count_match and int(assigned_count_match.group(1)) == len(available_bots): final_message = get_text(user_id, 'admin_assignbots_success', lang=lang, count=len(available_bots), code=code)
-        elif assigned_count_match: assigned_count = int(assigned_count_match.group(1)); final_message = get_text(user_id, 'admin_assignbots_partial_success', lang=lang, assigned_count=assigned_count, requested_count=len(available_bots), code=code)
-        else: final_message = message
-        await _send_or_edit_message(update, context, final_message)
-        for phone in available_bots: asyncio.create_task(telethon_api.get_userbot_runtime_info(phone))
+    if success: client_user_id = db.find_client_by_code(code)['user_id'] if db.find_client_by_code(code) else None; db.log_event_db("Userbots Assigned", f"Code: {code}, Count: {len(available_bots)}, Bots: {','.join(available_bots)}", user_id=user_id, client_id=client_user_id); assigned_count_match = re.search(r"Successfully assigned (\d+) userbots", message)
+    if assigned_count_match and int(assigned_count_match.group(1)) == len(available_bots): final_message = get_text(user_id, 'admin_assignbots_success', lang=lang, count=len(available_bots), code=code)
+    elif assigned_count_match: assigned_count = int(assigned_count_match.group(1)); final_message = get_text(user_id, 'admin_assignbots_partial_success', lang=lang, assigned_count=assigned_count, requested_count=len(available_bots), code=code)
+    else: final_message = message; await _send_or_edit_message(update, context, final_message);
+    for phone in available_bots: asyncio.create_task(telethon_api.get_userbot_runtime_info(phone))
     else: db.log_event_db("Bot Assign Failed", f"Code: {code}, Reason: {message}", user_id=user_id); fail_message = get_text(user_id, 'admin_assignbots_failed', lang=lang, code=code) + f"\nError: {message}"; await _send_or_edit_message(update, context, fail_message)
     clear_conversation_data(context); return ConversationHandler.END
 
@@ -524,22 +472,18 @@ async def client_folder_menu(update: Update, context: CallbackContext) -> int:
     keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_create', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}create_prompt")])
     if folders: keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_edit', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}select_edit?page=0")]); keyboard.append([InlineKeyboardButton(get_text(user_id, 'folder_menu_delete', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}select_delete?page=0")])
     else: text += "\n" + get_text(user_id, 'folder_no_folders', lang=lang)
-    keyboard.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")]); markup = InlineKeyboardMarkup(keyboard)
-    await _send_or_edit_message(update, context, text, reply_markup=markup); return ConversationHandler.END
+    keyboard.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_CLIENT_PREFIX}back_to_menu")]); markup = InlineKeyboardMarkup(keyboard); await _send_or_edit_message(update, context, text, reply_markup=markup); return ConversationHandler.END
 
 async def process_folder_name(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); folder_name = update.message.text.strip()
     if not folder_name: await _send_or_edit_message(update, context, get_text(user_id, 'error_invalid_input', lang=lang)); return STATE_WAITING_FOR_FOLDER_NAME
     log.info(f"User {user_id} attempting to create folder: {folder_name}"); folder_id_or_status = db.add_folder(folder_name, user_id)
-    if isinstance(folder_id_or_status, int) and folder_id_or_status > 0:
-        folder_id = folder_id_or_status; db.log_event_db("Folder Created", f"Name: {folder_name}, ID: {folder_id}", user_id=user_id)
-        await _send_or_edit_message(update, context, get_text(user_id, 'folder_create_success', lang=lang, name=html.escape(folder_name))); return await client_folder_menu(update, context)
+    if isinstance(folder_id_or_status, int) and folder_id_or_status > 0: folder_id = folder_id_or_status; db.log_event_db("Folder Created", f"Name: {folder_name}, ID: {folder_id}", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'folder_create_success', lang=lang, name=html.escape(folder_name))); return await client_folder_menu(update, context)
     elif folder_id_or_status is None: await _send_or_edit_message(update, context, get_text(user_id, 'folder_create_error_exists', lang=lang, name=html.escape(folder_name))); return STATE_WAITING_FOR_FOLDER_NAME
     else: db.log_event_db("Folder Create Failed", f"Name: {folder_name}", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'folder_create_error_db', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
 
 async def client_select_folder_to_edit_or_delete(update: Update, context: CallbackContext, action: str) -> int:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); _, page_data = query.data.split('?', 1); current_page = int(page_data.split('=')[1])
-    folders = db.get_folders_by_user(user_id)
+    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); _, page_data = query.data.split('?', 1); current_page = int(page_data.split('=')[1]); folders = db.get_folders_by_user(user_id)
     if not folders: await query.answer(get_text(user_id, 'folder_no_folders', lang=lang), show_alert=True); return await client_folder_menu(update, context)
     total_items = len(folders); start_index = current_page * ITEMS_PER_PAGE; end_index = start_index + ITEMS_PER_PAGE; folders_page = folders[start_index:end_index]
     text_key = 'folder_select_edit' if action == 'edit' else 'folder_select_delete'; text = get_text(user_id, text_key, lang=lang); keyboard = []
@@ -611,13 +555,9 @@ async def client_select_groups_to_remove(update: Update, context: CallbackContex
     selected_ids = set(context.user_data.get(CTX_TARGET_GROUP_IDS_TO_REMOVE, [])); total_items = len(groups); start_index = current_page * ITEMS_PER_PAGE
     end_index = start_index + ITEMS_PER_PAGE; groups_page = groups[start_index:end_index]
     text = get_text(user_id, 'folder_edit_remove_select', lang=lang, name=html.escape(folder_name)); keyboard = []
-    for group in groups_page:
-        db_id = group['id']; is_selected = db_id in selected_ids; prefix = "✅ " if is_selected else "➖ "
-        link_text = group['group_link'] or f"ID: {group['group_id']}"; display_text = group['group_name'] or link_text
-        button_text = prefix + html.escape(display_text[:40]) + ("..." if len(display_text) > 40 else "")
-        callback_data = f"{CALLBACK_FOLDER_PREFIX}edit_toggle_remove?id={db_id}&page={current_page}"; keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+    for group in groups_page: db_id = group['id']; is_selected = db_id in selected_ids; prefix = "✅ " if is_selected else "➖ "; link_text = group['group_link'] or f"ID: {group['group_id']}"; display_text = group['group_name'] or link_text; button_text = prefix + html.escape(display_text[:40]) + ("..." if len(display_text) > 40 else ""); callback_data = f"{CALLBACK_FOLDER_PREFIX}edit_toggle_remove?id={db_id}&page={current_page}"; keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     base_callback = f"{CALLBACK_FOLDER_PREFIX}edit_remove_select"; pagination_buttons = build_pagination_buttons(base_callback, current_page, total_items, ITEMS_PER_PAGE); keyboard.extend(pagination_buttons)
-    action_row = []
+    action_row = [];
     if selected_ids: action_row.append(InlineKeyboardButton(get_text(user_id, 'folder_edit_remove_confirm_title', lang=lang) + f" ({len(selected_ids)})", callback_data=f"{CALLBACK_FOLDER_PREFIX}edit_remove_confirm"))
     action_row.append(InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}back_to_edit_options")); keyboard.append(action_row)
     markup = InlineKeyboardMarkup(keyboard); await _send_or_edit_message(update, context, text, reply_markup=markup); return STATE_FOLDER_EDIT_REMOVE_SELECT
@@ -632,20 +572,11 @@ async def client_toggle_group_for_removal(update: Update, context: CallbackConte
     query.data = f"{CALLBACK_FOLDER_PREFIX}edit_remove_select?page={current_page}"; return await client_select_groups_to_remove(update, context)
 
 async def client_confirm_remove_selected_groups(update: Update, context: CallbackContext) -> int:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); folder_id = context.user_data.get(CTX_FOLDER_ID); folder_name = context.user_data.get(CTX_FOLDER_NAME)
-    ids_to_remove = list(context.user_data.get(CTX_TARGET_GROUP_IDS_TO_REMOVE, []))
-    if not folder_id or not folder_name or not ids_to_remove:
-        await query.answer(get_text(user_id, 'folder_edit_remove_none_selected', lang=lang), show_alert=True)
-        query.data = f"{CALLBACK_FOLDER_PREFIX}edit_remove_select?page=0"; return await client_select_groups_to_remove(update, context)
+    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); folder_id = context.user_data.get(CTX_FOLDER_ID); folder_name = context.user_data.get(CTX_FOLDER_NAME); ids_to_remove = list(context.user_data.get(CTX_TARGET_GROUP_IDS_TO_REMOVE, []))
+    if not folder_id or not folder_name or not ids_to_remove: await query.answer(get_text(user_id, 'folder_edit_remove_none_selected', lang=lang), show_alert=True); query.data = f"{CALLBACK_FOLDER_PREFIX}edit_remove_select?page=0"; return await client_select_groups_to_remove(update, context)
     removed_count = db.remove_target_groups_by_db_id(ids_to_remove, user_id)
-    if removed_count >= 0:
-        db.log_event_db("Folder Groups Removed", f"Folder: {folder_name}({folder_id}), Count: {removed_count}, IDs: {ids_to_remove}", user_id=user_id)
-        await _send_or_edit_message(update, context, get_text(user_id, 'folder_edit_remove_success', lang=lang, count=removed_count, name=html.escape(folder_name)))
-        context.user_data.pop(CTX_TARGET_GROUP_IDS_TO_REMOVE, None); return await client_show_folder_edit_options(update, context)
-    else:
-        db.log_event_db("Folder Group Remove Failed", f"Folder: {folder_name}({folder_id})", user_id=user_id)
-        await _send_or_edit_message(update, context, get_text(user_id, 'folder_edit_remove_error', lang=lang))
-        context.user_data.pop(CTX_TARGET_GROUP_IDS_TO_REMOVE, None); return await client_show_folder_edit_options(update, context)
+    if removed_count >= 0: db.log_event_db("Folder Groups Removed", f"Folder: {folder_name}({folder_id}), Count: {removed_count}, IDs: {ids_to_remove}", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'folder_edit_remove_success', lang=lang, count=removed_count, name=html.escape(folder_name))); context.user_data.pop(CTX_TARGET_GROUP_IDS_TO_REMOVE, None); return await client_show_folder_edit_options(update, context)
+    else: db.log_event_db("Folder Group Remove Failed", f"Folder: {folder_name}({folder_id})", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'folder_edit_remove_error', lang=lang)); context.user_data.pop(CTX_TARGET_GROUP_IDS_TO_REMOVE, None); return await client_show_folder_edit_options(update, context)
 
 async def process_folder_rename(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); new_name = update.message.text.strip(); folder_id = context.user_data.get(CTX_FOLDER_ID); current_name = context.user_data.get(CTX_FOLDER_NAME)
@@ -653,10 +584,7 @@ async def process_folder_rename(update: Update, context: CallbackContext) -> int
     if not new_name: await _send_or_edit_message(update, context, get_text(user_id, 'error_invalid_input', lang=lang)); return STATE_FOLDER_RENAME_PROMPT
     if new_name == current_name: return await client_show_folder_edit_options(update, context)
     success, reason = db.rename_folder(folder_id, user_id, new_name)
-    if success:
-        db.log_event_db("Folder Renamed", f"ID: {folder_id}, From: {current_name}, To: {new_name}", user_id=user_id)
-        await _send_or_edit_message(update, context, get_text(user_id, 'folder_edit_rename_success', lang=lang, new_name=html.escape(new_name)))
-        context.user_data[CTX_FOLDER_NAME] = new_name; return await client_show_folder_edit_options(update, context)
+    if success: db.log_event_db("Folder Renamed", f"ID: {folder_id}, From: {current_name}, To: {new_name}", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'folder_edit_rename_success', lang=lang, new_name=html.escape(new_name))); context.user_data[CTX_FOLDER_NAME] = new_name; return await client_show_folder_edit_options(update, context)
     else:
         if reason == "name_exists": await _send_or_edit_message(update, context, get_text(user_id, 'folder_edit_rename_error_exists', lang=lang, new_name=html.escape(new_name))); return STATE_FOLDER_RENAME_PROMPT
         else: db.log_event_db("Folder Rename Failed", f"ID: {folder_id}, To: {new_name}, Reason: {reason}", user_id=user_id); await _send_or_edit_message(update, context, get_text(user_id, 'folder_edit_rename_error_db', lang=lang)); return await client_show_folder_edit_options(update, context)
@@ -669,8 +597,7 @@ async def client_confirm_folder_delete(update: Update, context: CallbackContext)
     if not folder_name: await query.answer(get_text(user_id, 'folder_not_found_error', lang=lang), show_alert=True); return await client_folder_menu(update, context)
     text = get_text(user_id, 'folder_delete_confirm', lang=lang, name=html.escape(folder_name))
     keyboard = [[ InlineKeyboardButton(get_text(user_id, 'button_yes', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}delete_confirmed?id={folder_id}"), InlineKeyboardButton(get_text(user_id, 'button_no', lang=lang), callback_data=f"{CALLBACK_FOLDER_PREFIX}back_to_manage") ]]
-    markup = InlineKeyboardMarkup(keyboard)
-    await _send_or_edit_message(update, context, text, reply_markup=markup); return STATE_WAITING_FOR_FOLDER_SELECTION
+    markup = InlineKeyboardMarkup(keyboard); await _send_or_edit_message(update, context, text, reply_markup=markup); return STATE_WAITING_FOR_FOLDER_SELECTION
 
 async def client_delete_folder_confirmed(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
@@ -725,7 +652,13 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
         all_results_text += "\n" + get_text(user_id, 'join_results_bot_header', lang=lang, display_name=bot_display_name)
         if isinstance(result_item, Exception): log.error(f"Join batch task for {phone} raised exception: {result_item}"); all_results_text += f"\n  -> {get_text(user_id, 'error_generic', lang=lang)} ({html.escape(str(result_item))})"; continue
         error_info, results_dict = result_item
-        if error_info and error_info.get("error"): log.error(f"Join batch error for {phone}: {error_info['error']}"); all_results_text += f"\n  -> {get_text(user_id, 'error_generic', lang=lang)} ({html.escape(error_info['error'])})")
+        # *** FIXED SYNTAX ERROR HERE ***
+        if error_info and error_info.get("error"):
+            error_message_detail = error_info['error']
+            log.error(f"Join batch error for {phone}: {error_message_detail}")
+            generic_error_text = get_text(user_id, 'error_generic', lang=lang)
+            all_results_text += f"\n  -> {generic_error_text} ({html.escape(error_message_detail)})"
+        # *** END FIX ***
         if not results_dict: all_results_text += f"\n  -> ({get_text(user_id, 'error_no_results', lang=lang)})"; continue
         processed_links_count = 0
         for link, (status, detail) in results_dict.items():
@@ -757,23 +690,15 @@ async def client_show_stats(update: Update, context: CallbackContext) -> int:
 
 # --- Task Setup --- (Keep async) ...
 async def task_show_settings_menu(update: Update, context: CallbackContext) -> int:
-    # ... (Identical logic as before, ensuring await _send_or_edit_message) ...
-    query = update.callback_query # Can be called initially or after setting something
-    user_id, lang = get_user_id_and_lang(update, context)
-    phone = context.user_data.get(CTX_TASK_PHONE)
-    if not phone:
-        log.error(f"Task setup called without phone in context for user {user_id}")
-        if query and hasattr(query,'answer'): await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True)
-        return await client_menu(update, context)
-    bot_db_info = db.find_userbot(phone)
-    display_name = html.escape(f"@{bot_db_info['username']}" if bot_db_info and bot_db_info['username'] else phone)
+    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); phone = context.user_data.get(CTX_TASK_PHONE)
+    if not phone: log.error(f"Task setup called without phone in context for user {user_id}");
+    if query and hasattr(query,'answer'): await query.answer(get_text(user_id, 'session_expired', lang=lang), show_alert=True); return await client_menu(update, context)
+    bot_db_info = db.find_userbot(phone); display_name = html.escape(f"@{bot_db_info['username']}" if bot_db_info and bot_db_info['username'] else phone)
     task_settings = db.get_userbot_task_settings(user_id, phone)
     if not task_settings: task_settings = {}; context.user_data[CTX_TASK_SETTINGS] = task_settings
     elif CTX_TASK_SETTINGS not in context.user_data: context.user_data[CTX_TASK_SETTINGS] = dict(task_settings)
     current_settings = context.user_data.get(CTX_TASK_SETTINGS, {})
-    status = current_settings.get('status', 'inactive'); status_icon_key = f'task_status_icon_{status}'
-    status_icon = get_text(user_id, status_icon_key, lang=lang) if status_icon_key in translations.get(lang,{}) else ("🟢" if status == 'active' else "⚪️")
-    status_text = get_text(user_id, f'task_status_{status}', lang=lang)
+    status = current_settings.get('status', 'inactive'); status_icon_key = f'task_status_icon_{status}'; status_icon = get_text(user_id, status_icon_key, lang=lang) if status_icon_key in translations.get(lang,{}) else ("🟢" if status == 'active' else "⚪️"); status_text = get_text(user_id, f'task_status_{status}', lang=lang)
     primary_link_raw = current_settings.get('message_link'); primary_link = html.escape(primary_link_raw) if primary_link_raw else get_text(user_id, 'task_value_not_set', lang=lang)
     start_time_ts = current_settings.get('start_time'); start_time_str = format_dt(start_time_ts, fmt='%H:%M')
     interval_min = current_settings.get('repetition_interval')
@@ -785,38 +710,16 @@ async def task_show_settings_menu(update: Update, context: CallbackContext) -> i
     else: interval_str = get_text(user_id, 'task_value_not_set', lang=lang)
     target_str = get_text(user_id, 'task_value_not_set', lang=lang)
     if current_settings.get('send_to_all_groups'): target_str = get_text(user_id, 'task_value_all_groups', lang=lang)
-    elif current_settings.get('folder_id'):
-        folder_name = db.get_folder_name(current_settings['folder_id'])
-        if folder_name: target_str = get_text(user_id, 'task_value_folder', lang=lang, name=html.escape(folder_name))
-        else: target_str = get_text(user_id, 'task_value_folder', lang=lang, name="ID: " + str(current_settings['folder_id'])) + " (Deleted?)"
-    last_run_str = format_dt(current_settings.get('last_run')); last_error_raw = current_settings.get('last_error')
-    last_error = html.escape(last_error_raw[:100]) if last_error_raw else get_text(user_id, 'task_value_not_set', lang=lang)
-    text = f"<b>{get_text(user_id, 'task_setup_title', lang=lang, display_name=display_name)}</b>\n\n" + \
-           f"{get_text(user_id, 'task_setup_status_line', lang=lang, status_icon=status_icon, status_text=status_text)}\n" + \
-           f"{get_text(user_id, 'task_setup_primary_msg', lang=lang, link=primary_link)}\n" + \
-           f"{get_text(user_id, 'task_setup_start_time', lang=lang, time=start_time_str)}\n" + \
-           f"{get_text(user_id, 'task_setup_interval', lang=lang, interval=interval_str)}\n" + \
-           f"{get_text(user_id, 'task_setup_target', lang=lang, target=target_str)}\n\n" + \
-           f"{get_text(user_id, 'task_setup_last_run', lang=lang, time=last_run_str)}\n" + \
-           f"{get_text(user_id, 'task_setup_last_error', lang=lang, error=last_error)}\n"
-    keyboard = [
-        [InlineKeyboardButton(get_text(user_id, 'task_button_set_message', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}set_primary_link")],
-        [InlineKeyboardButton(get_text(user_id, 'task_button_set_time', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}set_time"),
-         InlineKeyboardButton(get_text(user_id, 'task_button_set_interval', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}set_interval")],
-        [InlineKeyboardButton(get_text(user_id, 'task_button_set_target', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}set_target_type")],
-        [InlineKeyboardButton(get_text(user_id, 'task_button_deactivate' if status == 'active' else 'task_button_activate', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}toggle_status"),
-         InlineKeyboardButton(get_text(user_id, 'task_button_save', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}save")],
-        [InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_bot_select")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    await _send_or_edit_message(update, context, text, reply_markup=markup, disable_web_page_preview=True)
-    return STATE_TASK_SETUP
+    elif current_settings.get('folder_id'): folder_name = db.get_folder_name(current_settings['folder_id']);
+    if folder_name: target_str = get_text(user_id, 'task_value_folder', lang=lang, name=html.escape(folder_name))
+    else: target_str = get_text(user_id, 'task_value_folder', lang=lang, name="ID: " + str(current_settings.get('folder_id','?'))) + " (Deleted?)"
+    last_run_str = format_dt(current_settings.get('last_run')); last_error_raw = current_settings.get('last_error'); last_error = html.escape(last_error_raw[:100]) if last_error_raw else get_text(user_id, 'task_value_not_set', lang=lang)
+    text = f"<b>{get_text(user_id, 'task_setup_title', lang=lang, display_name=display_name)}</b>\n\n" + f"{get_text(user_id, 'task_setup_status_line', lang=lang, status_icon=status_icon, status_text=status_text)}\n" + f"{get_text(user_id, 'task_setup_primary_msg', lang=lang, link=primary_link)}\n" + f"{get_text(user_id, 'task_setup_start_time', lang=lang, time=start_time_str)}\n" + f"{get_text(user_id, 'task_setup_interval', lang=lang, interval=interval_str)}\n" + f"{get_text(user_id, 'task_setup_target', lang=lang, target=target_str)}\n\n" + f"{get_text(user_id, 'task_setup_last_run', lang=lang, time=last_run_str)}\n" + f"{get_text(user_id, 'task_setup_last_error', lang=lang, error=last_error)}\n"
+    keyboard = [ [InlineKeyboardButton(get_text(user_id, 'task_button_set_message', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}set_primary_link")], [InlineKeyboardButton(get_text(user_id, 'task_button_set_time', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}set_time"), InlineKeyboardButton(get_text(user_id, 'task_button_set_interval', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}set_interval")], [InlineKeyboardButton(get_text(user_id, 'task_button_set_target', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}set_target_type")], [InlineKeyboardButton(get_text(user_id, 'task_button_deactivate' if status == 'active' else 'task_button_activate', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}toggle_status"), InlineKeyboardButton(get_text(user_id, 'task_button_save', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}save")], [InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_bot_select")] ]
+    markup = InlineKeyboardMarkup(keyboard); await _send_or_edit_message(update, context, text, reply_markup=markup, disable_web_page_preview=True); return STATE_TASK_SETUP
 
 async def task_prompt_set_link(update: Update, context: CallbackContext, link_type: str) -> int:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); prompt_key = 'task_prompt_primary_link' if link_type == 'primary' else 'task_prompt_fallback_link'
-    next_state = STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK
-    text = get_text(user_id, prompt_key, lang=lang); keyboard = [[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_task_menu")]]; markup = InlineKeyboardMarkup(keyboard)
-    await _send_or_edit_message(update, context, text, reply_markup=markup); return next_state
+    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); prompt_key = 'task_prompt_primary_link' if link_type == 'primary' else 'task_prompt_fallback_link'; next_state = STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK if link_type == 'primary' else STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK; text = get_text(user_id, prompt_key, lang=lang); keyboard = [[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_task_menu")]]; markup = InlineKeyboardMarkup(keyboard); await _send_or_edit_message(update, context, text, reply_markup=markup); return next_state
 
 async def process_task_link(update: Update, context: CallbackContext, link_type: str) -> int:
     user_id, lang = get_user_id_and_lang(update, context); phone = context.user_data.get(CTX_TASK_PHONE); task_settings = context.user_data.get(CTX_TASK_SETTINGS)
@@ -833,9 +736,7 @@ async def process_task_link(update: Update, context: CallbackContext, link_type:
     else: task_settings['fallback_message_link'] = link_text; await _send_or_edit_message(update, context, get_text(user_id, 'task_set_success_fallback', lang=lang)); return await task_show_settings_menu(update, context)
 
 async def task_prompt_start_time(update: Update, context: CallbackContext) -> int:
-     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); local_tz_name = LITHUANIA_TZ.zone if hasattr(LITHUANIA_TZ, 'zone') else 'Europe/Vilnius'
-     text = get_text(user_id, 'task_prompt_start_time', lang=lang, timezone_name=local_tz_name); keyboard = [[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_task_menu")]]; markup = InlineKeyboardMarkup(keyboard)
-     await _send_or_edit_message(update, context, text, reply_markup=markup); return STATE_WAITING_FOR_START_TIME
+     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); local_tz_name = LITHUANIA_TZ.zone if hasattr(LITHUANIA_TZ, 'zone') else 'Europe/Vilnius'; text = get_text(user_id, 'task_prompt_start_time', lang=lang, timezone_name=local_tz_name); keyboard = [[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_TASK_PREFIX}back_to_task_menu")]]; markup = InlineKeyboardMarkup(keyboard); await _send_or_edit_message(update, context, text, reply_markup=markup); return STATE_WAITING_FOR_START_TIME
 
 async def process_task_start_time(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); time_str = update.message.text.strip(); task_settings = context.user_data.get(CTX_TASK_SETTINGS)
@@ -912,7 +813,7 @@ async def task_toggle_status(update: Update, context: CallbackContext) -> int:
         if not task_settings.get('folder_id') and not task_settings.get('send_to_all_groups'): missing_fields.append(get_text(user_id, 'task_required_target', lang=lang))
         if missing_fields: missing_str = ", ".join(missing_fields); await query.answer(get_text(user_id, 'task_save_validation_fail', lang=lang, missing=missing_str), show_alert=True); return STATE_TASK_SETUP
     task_settings['status'] = new_status; log.info(f"User {user_id} toggled task status to {new_status}")
-    if hasattr(query, 'answer'): await query.answer()
+    if hasattr(query, 'answer'): await query.answer() # Answer silently
     return await task_show_settings_menu(update, context)
 
 async def task_save_settings(update: Update, context: CallbackContext) -> int:
@@ -931,9 +832,7 @@ async def task_save_settings(update: Update, context: CallbackContext) -> int:
         display_name = html.escape(f"@{bot_db_info['username']}" if bot_db_info and bot_db_info['username'] else phone)
         await _send_or_edit_message(update, context, get_text(user_id, 'task_save_success', lang=lang, display_name=display_name))
         clear_conversation_data(context); return await client_menu(update, context)
-    else:
-        db.log_event_db("Task Save Failed", f"User: {user_id}, Bot: {phone}", user_id=user_id, userbot_phone=phone)
-        await _send_or_edit_message(update, context, get_text(user_id, 'task_save_error', lang=lang)); return STATE_TASK_SETUP
+    else: db.log_event_db("Task Save Failed", f"User: {user_id}, Bot: {phone}", user_id=user_id, userbot_phone=phone); await _send_or_edit_message(update, context, get_text(user_id, 'task_save_error', lang=lang)); return STATE_TASK_SETUP
 
 # --- Admin Userbot List/Remove/Log Views --- (Keep async) ...
 async def admin_list_userbots(update: Update, context: CallbackContext) -> int: # Return state
@@ -1021,8 +920,7 @@ async def admin_view_system_logs(update: Update, context: CallbackContext) -> in
 
 # --- Callback Routers --- (Keep async) ...
 async def handle_client_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
-    client_info = db.find_client_by_user_id(user_id)
+    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; client_info = db.find_client_by_user_id(user_id)
     if not client_info or client_info['subscription_end'] < int(datetime.now(UTC_TZ).timestamp()): log.warning(f"Expired/Invalid client {user_id} tried action: {data}"); await query.answer(get_text(user_id, 'subscription_expired', lang=lang), show_alert=True); clear_conversation_data(context); return ConversationHandler.END
     action = data.split(CALLBACK_CLIENT_PREFIX)[1].split('?')[0]; log.debug(f"Client Callback Route: Action='{action}', Data='{data}'")
     if action == "select_bot_task": return await client_select_bot_generic(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP, 'task_select_userbot')
@@ -1112,8 +1010,7 @@ async def handle_interval_callback(update: Update, context: CallbackContext) -> 
      return None
 
 async def handle_generic_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
-    action = data.split(CALLBACK_GENERIC_PREFIX)[1] if CALLBACK_GENERIC_PREFIX in data else None; log.debug(f"Generic Callback Route: Action='{action}', Data='{data}'")
+    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data; action = data.split(CALLBACK_GENERIC_PREFIX)[1] if CALLBACK_GENERIC_PREFIX in data else None; log.debug(f"Generic Callback Route: Action='{action}', Data='{data}'")
     if action == "cancel": await _send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
     elif action == "confirm_no": await _send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang=lang)); clear_conversation_data(context);
     if is_admin(user_id): return await admin_command(update, context)
@@ -1141,16 +1038,17 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
         elif data.startswith(CALLBACK_GENERIC_PREFIX): next_state = await handle_generic_callback(update, context)
         else: log.warning(f"Unhandled CB prefix: User={user_id}, Data='{data}'"); await query.answer("Unknown button pressed.", show_alert=True); next_state = ConversationHandler.END
         # Default answer if handler finished without error and didn't explicitly answer
-        if query and hasattr(query, 'answer') and not query.answered and CALLBACK_GENERIC_PREFIX+"noop" not in data:
+        if query and hasattr(query, 'answered') and not query.answered and CALLBACK_GENERIC_PREFIX+"noop" not in data:
              try: await query.answer()
              except Exception: pass
     except Exception as e:
         log.error(f"Error processing callback data '{data}' for user {user_id}: {e}", exc_info=True)
         try:
-             if query and hasattr(query, 'answer') and not query.answered: await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+             if query and hasattr(query, 'answered') and not query.answered: await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
         except Exception: pass
         await _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang)); clear_conversation_data(context); next_state = ConversationHandler.END
     return next_state
+
 
 # --- Conversation Handler Definition ---
 # Using async def for all handlers now. PTB v13 might warn but should work.
@@ -1165,7 +1063,7 @@ main_conversation = ConversationHandler(
         # Admin States
         STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_phone)],
         STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_id)],
-        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash)],
+        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash)], # Use original async version name
         STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_code)],
         STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_password)],
         STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_invite_details)],
@@ -1178,7 +1076,7 @@ main_conversation = ConversationHandler(
         STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename)],
         STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_join_group_links)], # Used by join also
+        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_join_group_links)], # Note: Also used by folder add link processing
         STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)],
         # Client Task States
         STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
@@ -1200,4 +1098,3 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded with implemented functions.")
-# --- END OF FILE handlers.py ---
