@@ -36,7 +36,7 @@ translations = {
         'session_expired': "🔄 Your previous action timed out or was cancelled. Please start over.",
         'state_cleared': "🔄 Action cancelled. Please restart the operation.",
         'unknown_user': "❓ I don't seem to have your active account details. Please use /start with a valid invitation code.",
-        'subscription_expired': "⏳ Your subscription has expired. Please contact support to renew.", # Changed from activation_expired
+        'subscription_expired': "⏳ Your subscription has expired. Please contact support to renew.",
 
         # --- Buttons ---
         'button_back': "🔙 Back",
@@ -59,26 +59,26 @@ translations = {
         'welcome': "👋 Welcome! Please send your unique invitation code to activate your account (e.g., `a565ae57`). If you are an Admin, use /admin.",
         'invalid_code_format': "⚠️ The code format seems incorrect (should be 8 characters, letters a-f, numbers 0-9). Please check and try again.",
         'code_not_found': "❌ Invalid invitation code. It might be incorrect or expired.",
-        'code_expired': "⏳ This invitation code has expired.", # Used during activation check
+        'code_expired': "⏳ This invitation code has expired.",
         'code_already_used': "🚫 This invitation code has already been activated by another user.",
         'user_already_active': "⚠️ You already seem to have an active account. Use /start to access the menu.",
         'activation_error': "⚙️ An error occurred during activation. Please double-check the code or contact support.",
         'activation_db_error': "⚙️ A database error occurred during activation. Please contact support.",
-        'already_active': "✅ Your account is already active.", # Used if user enters their own code again
+        'already_active': "✅ Your account is already active.",
         'activation_success': "✅ Account activated! Welcome aboard. Use /start to see your menu.",
 
         # --- Client Menu ---
         'client_menu_title': "<b>Client Menu</b> (Code: <code>{code}</code>)",
         'client_menu_sub_end': "Subscription ends: <code>{end_date}</code>",
         'client_menu_userbots_title': "<u>Assigned Userbots ({count}):</u>",
-        'client_menu_userbot_line': "{index}. {status_icon} {display_name} (<i>Status: {status}</i>)", # Removed index, status inside now
+        'client_menu_userbot_line': "{index}. {status_icon} {display_name} (<i>Status: {status}</i>)",
         'client_menu_userbot_error': "  └─ <pre>Error: {error}</pre>",
         'client_menu_no_userbots': "You currently have no userbots assigned.",
         'client_menu_button_setup_tasks': "🚀 Setup Forwarding Tasks",
         'client_menu_button_manage_folders': "📁 Manage Group Folders",
         'client_menu_button_join_groups': "🔗 Join New Groups",
         'client_menu_button_view_joined': "👁️ View Joined Groups (per Bot)", # Kept key, but feature disabled in handler
-        'client_menu_button_logs': "📊 View Your Stats", # Kept key, but feature disabled in handler
+        'client_menu_button_stats': "📊 View Your Stats", # Corrected key from "logs" to "stats" as per handler.
         'client_menu_button_language': "🌐 Set Language",
 
         # --- Language Selection ---
@@ -87,13 +87,13 @@ translations = {
         'language_set_error': "❌ Failed to set language.",
 
         # --- Userbot Action Selection (Generic) ---
-        'action_select_userbot_title': "Select a Userbot", # Generic title, maybe override per action
-        'action_select_userbot_prompt': "Please select the userbot for this action:", # Generic prompt
+        'action_select_userbot_title': "Select a Userbot",
+        'action_select_userbot_prompt': "Please select the userbot for this action:",
 
         # --- Userbot Joining Groups ---
         'join_select_userbot': "Which userbot(s) should join the groups?",
         'join_select_userbot_all': "🤖 All Assigned Userbots",
-        'join_select_userbot_active': "🟢 Only Active Userbots ({count})", # New button
+        'join_select_userbot_active': "🟢 Only Active Userbots ({count})",
         'join_enter_group_links': ("Please send the list of group/channel links (one per line).\n\n"
                                    "<i>Examples:</i>\n"
                                    "<code>https://t.me/publicgroup</code>\n"
@@ -108,14 +108,13 @@ translations = {
         'join_results_already_member': "⚪ Already Member",
         'join_results_pending': "⏳ Join Request Pending (Admin Approval?)",
         'join_results_failed': "❌ Failed ({reason})",
-        'join_results_flood_wait': "⏳ Flood Wait ({seconds}s)", # Specific status for flood wait
-        # Reasons for failure (used inside 'failed' status)
+        'join_results_flood_wait': "⏳ Flood Wait ({seconds}s)",
         'join_results_reason_invalid_invite': "invalid/expired invite link",
         'join_results_reason_private': "private/inaccessible",
         'join_results_reason_invalid_link_or_resolve': "invalid link or cannot resolve",
         'join_results_reason_chat_full': "group/channel is full",
         'join_results_reason_banned_or_restricted': "banned/restricted",
-        'join_results_reason_admin_approval': "admin approval needed", # If pending isn't used
+        'join_results_reason_admin_approval': "admin approval needed",
         'join_results_reason_timeout': "operation timed out",
         'join_results_reason_batch_timeout': "batch operation timed out",
         'join_results_reason_batch_error': "batch error ({error})",
@@ -125,7 +124,6 @@ translations = {
         'join_no_links': "⚠️ No valid group links were provided in your message.",
 
         # --- View Joined Groups ---
-        # Feature currently simplified/removed in handlers, keys kept as placeholders
         'view_joined_select_bot': "Select a userbot to view its joined groups:",
         'view_joined_fetching': "⏳ Fetching joined groups for {display_name}... This may take a while.",
         'view_joined_title': "<b>👁️ Joined Groups for {display_name}:</b>",
@@ -135,7 +133,6 @@ translations = {
         'view_joined_none': "Userbot {display_name} hasn't joined any recognizable groups or channels yet.",
 
         # --- Client Stats ---
-        # Feature currently simplified/removed in handlers, keys kept as placeholders
         'client_stats_title': "<b>📊 Your Stats</b>",
         'client_stats_messages': "Total Messages Forwarded (All Tasks): <code>{total_sent}</code>",
         'client_stats_forwards': "Total Forward Operations Run: <code>{forwards_count}</code>",
@@ -152,21 +149,19 @@ translations = {
         'folder_create_error_db': "⚙️ Could not create folder due to a database error.",
         'folder_select_edit': "Select a folder to edit:",
         'folder_select_delete': "Select a folder to delete:",
-        'folder_not_found_error': "❌ Folder not found or access denied.", # New key
+        'folder_not_found_error': "❌ Folder not found or access denied.",
         'folder_no_folders': "You haven't created any folders yet.",
         'folder_edit_title': "<b>✏️ Editing Folder:</b> <code>{name}</code>",
         'folder_edit_groups_intro': "\nCurrent groups in this folder:",
         'folder_edit_no_groups': "\nThis folder currently has no groups.",
-        'folder_edit_group_line': "\n- <a href='{link}'>{name}</a>", # Assumes link is available
-        'folder_edit_group_line_no_link': "\n- {name}", # Fallback if no link
+        'folder_edit_group_line': "\n- <a href='{link}'>{name}</a>",
+        'folder_edit_group_line_no_link': "\n- {name}",
         'folder_edit_action_add': "➕ Add New Links",
         'folder_edit_action_remove': "➖ Remove Groups",
         'folder_edit_action_rename': "📝 Rename Folder",
-        # 'folder_edit_action_update': "🔄 Replace Group List", # Action removed for simplicity
-        # 'folder_edit_action_delete': "🗑️ Delete This Folder", # Delete handled from main menu
         'folder_edit_add_prompt': "Send the group/channel links (one per line) to add to folder '<code>{name}</code>'. Use public links (t.me/...), private links (t.me/+...), or usernames (@...).",
         'folder_edit_remove_select': "Select groups to remove from '<code>{name}</code>':\n(Click button to toggle selection)",
-        'folder_edit_remove_button': "{prefix}{text}", # Example: ✅ Group Name
+        'folder_edit_remove_button': "{prefix}{text}",
         'folder_edit_remove_confirm_title': "Confirm Removal",
         'folder_edit_remove_confirm_text': "Remove {count} selected group(s) from folder '<code>{name}</code>'?",
         'folder_edit_remove_success': "✅ {count} group(s) removed from folder '<code>{name}</code>'.",
@@ -184,22 +179,22 @@ translations = {
         'folder_results_title': "<b>🛠️ Folder Update Results for '<code>{name}</code>':</b>",
         'folder_results_line': "<code>{link}</code>: {status}",
         'folder_results_added': "✅ Added",
-        'folder_results_ignored': "⚪ Ignored (duplicate or invalid)",
+        'folder_results_ignored': "⚪ Ignored (duplicate or unresolvable)", # Updated
         'folder_results_failed': "❌ Failed ({reason})",
         'folder_link_parse_error': "invalid link format",
-        'folder_resolve_error': "could not resolve ID/name", # New reason
+        'folder_resolve_error': "could not resolve ID/name",
         'folder_add_db_error': "database error",
 
         # --- Task Setup ---
         'task_select_userbot': "🚀 Setup Forwarding Task\nSelect a userbot to configure:",
         'task_setup_title': "<b>⚙️ Task Settings for {display_name}</b>",
         'task_setup_status_line': "<code>Status:</code> {status_icon} {status_text}",
-        'task_setup_primary_msg': "<code>Primary Msg:</code> {link}", # Use code for link display
+        'task_setup_primary_msg': "<code>Primary Msg:</code> {link}",
         'task_setup_fallback_msg': "<code>Fallback Msg:</code> {link}",
-        'task_setup_start_time': "<code>Start Time (Local):</code> {time}", # Clarify local time
+        'task_setup_start_time': "<code>Start Time (Local):</code> {time}",
         'task_setup_interval': "<code>Interval:</code> {interval}",
         'task_setup_target': "<code>Target:</code> {target}",
-        'task_setup_last_run': "<code>Last Run (UTC):</code> {time}", # Clarify UTC
+        'task_setup_last_run': "<code>Last Run (UTC):</code> {time}",
         'task_setup_last_error': "<code>Last Error:</code> <pre>{error}</pre>",
         'task_value_not_set': "<i>Not Set</i>",
         'task_value_all_groups': "🌐 All Joined Groups",
@@ -212,17 +207,17 @@ translations = {
         'task_button_set_time': "⏰ Set Start Time",
         'task_button_set_interval': "🔁 Set Interval",
         'task_button_set_target': "🎯 Set Target",
-        'task_button_toggle_status': "{action} Task", # Combined button text
-        'task_button_activate': "▶️ Activate", # Used in toggle button text
-        'task_button_deactivate': "⏸️ Deactivate", # Used in toggle button text
+        'task_button_toggle_status': "{action} Task",
+        'task_button_activate': "▶️ Activate",
+        'task_button_deactivate': "⏸️ Deactivate",
         'task_button_save': "💾 Save & Exit",
-        # 'task_button_cancel': "❌ Cancel", # Using standard back button now
         'task_prompt_primary_link': ("Send the link to the <b>primary message</b> to be forwarded.\n"
                                      "<i>Example:</i> <code>https://t.me/c/1234567890/123</code> or <code>https://t.me/channel_username/456</code>"),
         'task_prompt_fallback_link': ("Send the link to the <b>fallback message</b> (optional, used if primary fails).\n"
                                       "Send '<code>skip</code>' to not use a fallback message."),
         'task_error_invalid_link': "⚠️ Invalid message link format. Please provide a direct link to a specific message (e.g., `https://t.me/c/123.../456`).",
         'task_error_link_unreachable': "❌ Could not access the message at this link. Ensure the userbot (<code>{bot_phone}</code>) has access to the source chat/channel.",
+        'task_verifying_link': "⏳ Verifying link access...", # New key
         'task_set_success_msg': "✅ Primary message link set.",
         'task_set_success_fallback': "✅ Fallback message link set.",
         'task_set_skipped_fallback': "⚪ Fallback message skipped.",
@@ -231,7 +226,7 @@ translations = {
         'task_error_invalid_time': "⚠️ Invalid time format. Use HH:MM (e.g., <code>09:00</code>, <code>23:15</code>).",
         'task_set_success_time': "✅ Start time set to {time} (Local Time).",
         'task_select_interval_title': "Select the repetition interval:",
-        'task_interval_button': "Every {value}", # Value will be like "5 min", "1 h", "1 d"
+        'task_interval_button': "Every {value}",
         'task_set_success_interval': "✅ Interval set to {interval}.",
         'task_select_target_title': "Choose where to forward the messages:",
         'task_button_target_folder': "📁 Select Folder",
@@ -271,25 +266,25 @@ translations = {
         'admin_userbot_invalid_api_hash': "❌ API Hash seems invalid (usually a long hexadecimal string).",
         'admin_userbot_already_exists': "ℹ️ Userbot <code>{phone}</code> already exists in DB. Attempting re-authentication/status check...",
         'admin_userbot_auth_connecting': "⏳ Connecting to Telegram for <code>{phone}</code>...",
-        'admin_userbot_auth_sending_code': "⏳ Requesting login code for <code>{phone}</code>...", # Not currently shown to user directly
-        'admin_userbot_auth_code_sent': "✅ Code sent. Please enter it now.", # Not currently shown
+        'admin_userbot_auth_sending_code': "⏳ Requesting login code for <code>{phone}</code>...",
+        'admin_userbot_auth_code_sent': "✅ Code sent. Please enter it now.",
         'admin_userbot_auth_signing_in': "⏳ Signing in <code>{phone}</code>...",
         'admin_userbot_add_success': "✅ Userbot {display_name} added and authenticated!",
-        'admin_userbot_auth_success': "✅ Userbot {display_name} authenticated!", # Used? Maybe redundant
+        'admin_userbot_auth_success': "✅ Userbot {display_name} authenticated!",
         'admin_userbot_already_auth': "✅ Userbot {display_name} is already authorized and active.",
         'admin_userbot_auth_error_connect': "❌ Connection Error for <code>{phone}</code>: {error}",
-        'admin_userbot_auth_error_auth': "❌ Authentication Error for <code>{phone}</code>: {error}", # Generic auth error
+        'admin_userbot_auth_error_auth': "❌ Authentication Error for <code>{phone}</code>: {error}",
         'admin_userbot_auth_error_flood': "❌ Flood Wait for <code>{phone}</code>: Try again in {seconds} seconds.",
         'admin_userbot_auth_error_config': "❌ Configuration Error for <code>{phone}</code> (Invalid API ID/Hash?): {error}",
         'admin_userbot_auth_error_phone_invalid': "❌ Telegram rejected the phone number <code>{phone}</code>.",
         'admin_userbot_auth_error_code_invalid': "❌ Invalid or expired verification code for <code>{phone}</code>.",
         'admin_userbot_auth_error_password_invalid': "❌ Incorrect password for <code>{phone}</code>.",
-        'admin_userbot_auth_error_password_needed_unexpected': "🔒 Password needed, but wasn't expected. Please restart the process.", # New key
+        'admin_userbot_auth_error_password_needed_unexpected': "🔒 Password needed, but wasn't expected. Please restart the process.",
         'admin_userbot_auth_error_account_issue': "❌ Account issue for <code>{phone}</code> (Banned? Deactivated?): {error}",
         'admin_userbot_auth_error_unknown': "❌ An unexpected error occurred during authentication for <code>{phone}</code>: {error}",
         'admin_userbot_select_remove': "Select the userbot to remove:",
         'admin_userbot_no_bots_to_remove': "No userbots have been added yet.",
-        'admin_userbot_not_found': "❌ Userbot not found in database.", # New key
+        'admin_userbot_not_found': "❌ Userbot not found in database.",
         'admin_userbot_remove_confirm_title': "Confirm Removal",
         'admin_userbot_remove_confirm_text': "Are you sure you want to remove userbot {display_name}?\nThis will delete its session and tasks.",
         'admin_userbot_remove_success': "✅ Userbot {display_name} removed.",
@@ -299,12 +294,11 @@ translations = {
         'admin_userbot_list_status_icon_active': "🟢",
         'admin_userbot_list_status_icon_inactive': "⚪️",
         'admin_userbot_list_status_icon_error': "🔴",
-        'admin_userbot_list_status_icon_connecting': "🔌", # Connecting
-        'admin_userbot_list_status_icon_needs_code': "🔢", # Needs Code
-        'admin_userbot_list_status_icon_needs_password': "🔒", # Needs Password
-        'admin_userbot_list_status_icon_authenticating': "⏳", # Authenticating
-        'admin_userbot_list_status_icon_initializing': "⚙️", # Initializing
-        # Fallback icon for unknown statuses
+        'admin_userbot_list_status_icon_connecting': "🔌",
+        'admin_userbot_list_status_icon_needs_code': "🔢",
+        'admin_userbot_list_status_icon_needs_password': "🔒",
+        'admin_userbot_list_status_icon_authenticating': "⏳",
+        'admin_userbot_list_status_icon_initializing': "⚙️",
         'admin_userbot_list_status_icon_unknown': "❓",
         'admin_userbot_list_unassigned': "<i>Unassigned</i>",
         'admin_userbot_list_error_line': "  └─ <pre>Error: {error}</pre>",
@@ -312,10 +306,10 @@ translations = {
 
         # --- Admin Invite Management ---
         'admin_invite_prompt_details': ("Enter subscription details:\nFormat: <code><days>d <bots>b</code>\n"
-                                        "Example: <code>30d 2b</code> (for 30 days, allows assignment of 2 bots)"), # Escaped HTML
+                                        "Example: <code>30d 2b</code> (for 30 days, allows assignment of 2 bots)"),
         'admin_invite_invalid_format': "❌ Invalid format. Use: <code><days>d <bots>b</code> (e.g., <code>30d 2b</code>)",
         'admin_invite_invalid_numbers': "❌ Days and bot count must be positive numbers.",
-        'admin_invite_no_bots_available': "❌ Not enough available (active & unassigned) userbots ({needed} required, {available} found). Add more userbots first.", # Kept key, but logic disabled
+        'admin_invite_no_bots_available': "❌ Not enough available (active & unassigned) userbots ({needed} required, {available} found). Add more userbots first.",
         'admin_invite_generating': "⏳ Generating code...",
         'admin_invite_success': "✅ Invitation code created:\n<code>{code}</code>\n(Expires: {end_date}, For: {count} bots)",
         'admin_invite_db_error': "⚙️ Failed to save invitation code to database (Code might already exist?).",
@@ -323,7 +317,7 @@ translations = {
         # --- Admin Subscription Management ---
         'admin_subs_title': "<b>📄 Active Subscriptions:</b>",
         'admin_subs_line': "User: {user_link} | Code: <code>{code}</code> | Ends: {end_date} | Bots: {bot_count}",
-        'admin_subs_no_user': "<i>Not Activated Yet</i>", # Used if user_id is null
+        'admin_subs_no_user': "<i>Not Activated Yet</i>",
         'admin_subs_error': "⚙️ Could not retrieve subscriptions.",
         'admin_subs_none': "No active client subscriptions found.",
         'admin_extend_prompt_code': "Enter the client's invitation code to extend their subscription:",
@@ -338,9 +332,9 @@ translations = {
         'admin_assignbots_invalid_count': "❌ Please enter a positive number of userbots.",
         'admin_assignbots_no_bots_available': "❌ Not enough available (active & unassigned) userbots ({needed} required, {available} found).",
         'admin_assignbots_success': "✅ Assigned {count} userbots to client <code>{code}</code>.",
-        'admin_assignbots_partial_success': "⚠️ Assigned {assigned_count}/{requested_count} userbots to client <code>{code}</code>. Some may have been already assigned.", # New key
+        'admin_assignbots_partial_success': "⚠️ Assigned {assigned_count}/{requested_count} userbots to client <code>{code}</code>. Some may have been already assigned or not found.",
         'admin_assignbots_db_error': "⚙️ Failed to assign userbots in database.",
-        'admin_assignbots_failed': "❌ Failed to assign any userbots to client <code>{code}</code>. Check bot availability and logs.", # New key
+        'admin_assignbots_failed': "❌ Failed to assign any userbots to client <code>{code}</code>. Check bot availability and logs.",
 
 
         # --- Admin Logs ---
@@ -446,14 +440,12 @@ def get_text(user_id, key, lang_override=None, **kwargs):
     else:
         # Fallback to the key itself if not found anywhere (indicates missing key definition)
         log.warning(f"Translation key '{key}' not found in '{lang}' or English fallback.")
-        text_template = key # Return the key as a last resort
+        text_template = f"KEY_NOT_FOUND: {key}" # Return the key with a prefix as a last resort
 
     # Format the string
     try:
-        # Escape kwargs values by default before formatting to prevent injection issues
-        # safe_kwargs = {k: html.escape(str(v)) for k, v in kwargs.items()}
-        # Reverted escaping here as it interferes with intended HTML in translations (like user links)
         # Escaping should be done when *building* the message in handlers.py for user-provided data.
+        # Here, we assume the translation strings might contain intended HTML.
         return text_template.format(**kwargs)
     except KeyError as e:
         # Error if a placeholder in the template string doesn't have a matching kwarg
