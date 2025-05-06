@@ -351,29 +351,36 @@ def start_command(update: Update, context: CallbackContext) -> str | int:
             return STATE_WAITING_FOR_CODE
 
 
-async def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
-    user_id, lang = get_user_id_and_lang(update, context); code = update.message.text.strip().lower()
-    log.info(f"UserID={user_id} submitted code: {code}")
-    if not re.fullmatch(r'[a-f0-9]{8}', code): 
-        await _send_or_edit_message(update, context, get_text(user_id, 'invalid_code_format', lang=lang))
+def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    code = update.message.text.strip().lower()
+    log.info(f"Processing invitation code '{code}' for user {user_id}")
+    
+    # Check if user already has an active subscription
+    client_info = db.find_client_by_user_id(user_id)
+    if client_info:
+        now_ts = int(datetime.now(UTC_TZ).timestamp())
+        if client_info['subscription_end'] > now_ts:
+            _send_or_edit_message(update, context, get_text(user_id, 'already_subscribed', lang=lang))
+            return ConversationHandler.END
+    
+    # Validate and activate the code
+    result = db.activate_invite_code(code, user_id)
+    if not result:
+        _send_or_edit_message(update, context, get_text(user_id, 'invalid_invite_code', lang=lang))
         return STATE_WAITING_FOR_CODE
     
-    success, status_key = db.activate_client(code, user_id)
-    text_to_send = get_text(user_id, status_key, lang=lang, code=code)
+    # Show success message and client menu
+    _send_or_edit_message(
+        update, 
+        context,
+        get_text(user_id, 'invite_code_activated', lang=lang, 
+                days=result['subscription_days'],
+                end_date=format_dt(result['subscription_end'], tz=LITHUANIA_TZ))
+    )
     
-    if success:
-        log.info(f"Activated client {user_id} code {code}"); 
-        db.log_event_db("Client Activated", f"Code: {code}", user_id=user_id)
-        new_lang = db.get_user_language(user_id)
-        context.user_data[CTX_LANG] = new_lang
-        await _send_or_edit_message(update, context, text_to_send) 
-        await _show_menu_async(update, context, build_client_menu) 
-        return ConversationHandler.END
-    else:
-        log.warning(f"Failed activation user {user_id} code {code}: {status_key}")
-        await _send_or_edit_message(update, context, text_to_send)
-        clear_conversation_data(context)
-        return ConversationHandler.END 
+    # Return to client menu
+    return client_menu(update, context)
 
 # **MODIFIED HERE for simple_async_test**
 def admin_command(update: Update, context: CallbackContext) -> str | int:
@@ -429,13 +436,24 @@ def conversation_fallback(update: Update, context: CallbackContext) -> int:
      clear_conversation_data(context)
      return ConversationHandler.END
 
-async def client_menu(update: Update, context: CallbackContext) -> int:
+def client_menu(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
-    if update.callback_query: 
-        clear_conversation_data(context)
-        _, lang = get_user_id_and_lang(update, context) 
-    log.info(f"client_menu: Displaying for user {user_id}, lang {lang}")
-    await _show_menu_async(update, context, build_client_menu)
+    clear_conversation_data(context)
+    log.info(f"Client menu: UserID={user_id}, Lang={lang}")
+    
+    # Check subscription status
+    client_info = db.find_client_by_user_id(user_id)
+    if not client_info:
+        _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    now_ts = int(datetime.now(UTC_TZ).timestamp())
+    if client_info['subscription_end'] < now_ts:
+        _send_or_edit_message(update, context, get_text(user_id, 'subscription_expired', lang=lang))
+        return ConversationHandler.END
+    
+    # Show client menu
+    context.dispatcher.run_async(_show_menu_async, update, context, build_client_menu)
     return ConversationHandler.END
 
 async def client_ask_select_language(update: Update, context: CallbackContext) -> int:
