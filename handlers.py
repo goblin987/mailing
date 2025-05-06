@@ -426,7 +426,7 @@ async def process_admin_invite_details(update: Update, context: CallbackContext)
     try:
         days = int(match.group(1))
         bots_needed = int(match.group(2))
-        if days <= 0 or bots_needed <= 0:
+        if days <= 0 or bots_needed <= 0: # Corrected this line
             raise ValueError("Days and bots must be positive")
     except (ValueError, AssertionError):
         await _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_invalid_numbers', lang=lang)); return STATE_WAITING_FOR_SUB_DETAILS
@@ -447,7 +447,7 @@ async def process_admin_extend_days(update: Update, context: CallbackContext) ->
     if not code: await _send_or_edit_message(update, context, get_text(user_id, 'session_expired', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
     try:
         days_to_add = int(days_str)
-        if days_to_add <= 0:
+        if days_to_add <= 0: # Corrected this line
             raise ValueError("Days must be positive")
     except (ValueError, AssertionError):
         await _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_invalid_days', lang=lang)); return STATE_WAITING_FOR_EXTEND_DAYS
@@ -468,8 +468,12 @@ async def process_admin_add_bots_code(update: Update, context: CallbackContext) 
 async def process_admin_add_bots_count(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); count_str = update.message.text.strip(); code = context.user_data.get(CTX_ADD_BOTS_CODE)
     if not code: await _send_or_edit_message(update, context, get_text(user_id, 'session_expired', lang=lang)); clear_conversation_data(context); return ConversationHandler.END
-    try: count_to_add = int(count_str); if count_to_add <= 0: raise ValueError("Count must be positive")
-    except (ValueError, AssertionError): await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_invalid_count', lang=lang)); return STATE_WAITING_FOR_ADD_USERBOTS_COUNT
+    try:
+        count_to_add = int(count_str)
+        if count_to_add <= 0: # Corrected this line
+            raise ValueError("Count must be positive")
+    except (ValueError, AssertionError):
+        await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_invalid_count', lang=lang)); return STATE_WAITING_FOR_ADD_USERBOTS_COUNT
     available_bots = db.get_unassigned_userbots(limit=count_to_add)
     if len(available_bots) < count_to_add: await _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_no_bots_available', lang=lang, needed=count_to_add, available=len(available_bots))); return STATE_WAITING_FOR_ADD_USERBOTS_COUNT
     success, message = db.assign_userbots_to_client(code, available_bots)
@@ -906,7 +910,10 @@ async def task_save_settings(update: Update, context: CallbackContext) -> int:
 
 async def admin_list_userbots(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-    try: _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
+    try:
+        current_page = 0
+        if '?' in query.data:
+            _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     all_bots = db.get_all_userbots()
     if not all_bots: text = get_text(user_id, 'admin_userbot_list_no_bots', lang=lang); markup = InlineKeyboardMarkup([[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")]]); await _send_or_edit_message(update, context, text, reply_markup=markup); return ConversationHandler.END
@@ -922,7 +929,10 @@ async def admin_list_userbots(update: Update, context: CallbackContext) -> int:
 
 async def admin_select_userbot_to_remove(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-    try: _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
+    try:
+        current_page = 0
+        if '?' in query.data:
+            _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     all_bots = db.get_all_userbots()
     if not all_bots: text = get_text(user_id, 'admin_userbot_no_bots_to_remove', lang=lang); markup = InlineKeyboardMarkup([[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")]]); await _send_or_edit_message(update, context, text, reply_markup=markup); return ConversationHandler.END
@@ -935,14 +945,21 @@ async def admin_select_userbot_to_remove(update: Update, context: CallbackContex
 
 async def admin_confirm_remove_userbot(update: Update, context: CallbackContext) -> int:
      query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-     try: phone_to_remove = query.data.split(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirm_")[1]
+     phone_to_remove = None
+     try:
+         phone_to_remove = query.data.split(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirm_")[1]
      except IndexError:
-         log.error(f"Could not parse phone: {query.data}");
-         if hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+         log.error(f"Could not parse phone from remove confirm callback: {query.data}")
+         if hasattr(query, 'answer') and not context.bot_data.get(f'answered_{query.id}', False):
+             await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+             context.bot_data[f'answered_{query.id}'] = True
          return admin_command(update, context)
+
      bot_info = db.find_userbot(phone_to_remove)
      if not bot_info:
-         if hasattr(query, 'answer'): await query.answer(get_text(user_id, 'admin_userbot_not_found', lang=lang), show_alert=True)
+         if hasattr(query, 'answer') and not context.bot_data.get(f'answered_{query.id}', False):
+             await query.answer(get_text(user_id, 'admin_userbot_not_found', lang=lang), show_alert=True)
+             context.bot_data[f'answered_{query.id}'] = True
          return admin_command(update, context)
      username = bot_info['username']; display_name = html.escape(f"@{username}" if username else phone_to_remove)
      text = get_text(user_id, 'admin_userbot_remove_confirm_text', lang=lang, display_name=display_name)
@@ -951,10 +968,14 @@ async def admin_confirm_remove_userbot(update: Update, context: CallbackContext)
 
 async def admin_remove_userbot_confirmed(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-    try: phone_to_remove = query.data.split(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_")[1]
+    phone_to_remove = None
+    try:
+        phone_to_remove = query.data.split(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_")[1]
     except IndexError:
-        log.error(f"Could not parse phone: {query.data}");
-        if hasattr(query, 'answer'): await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+        log.error(f"Could not parse phone from remove confirmed callback: {query.data}");
+        if hasattr(query, 'answer') and not context.bot_data.get(f'answered_{query.id}', False):
+            await query.answer(get_text(user_id, 'error_generic', lang=lang), show_alert=True)
+            context.bot_data[f'answered_{query.id}'] = True
         return admin_command(update, context)
     bot_info = db.find_userbot(phone_to_remove); display_name = "N/A";
     if bot_info: display_name = html.escape(f"@{bot_info['username']}" if bot_info['username'] else phone_to_remove)
@@ -969,7 +990,10 @@ async def admin_remove_userbot_confirmed(update: Update, context: CallbackContex
 
 async def admin_view_subscriptions(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context)
-    try: _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
+    try:
+        current_page = 0
+        if '?' in query.data:
+            _, params = query.data.split('?', 1); current_page = int(params.split('=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
     subs = db.get_all_subscriptions()
     if not subs: text = get_text(user_id, 'admin_subs_none', lang=lang); markup = InlineKeyboardMarkup([[InlineKeyboardButton(get_text(user_id, 'button_back', lang=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")]]); await _send_or_edit_message(update, context, text, reply_markup=markup); return ConversationHandler.END
