@@ -57,11 +57,11 @@ CTX_TASK_SETTINGS = "task_settings"; CTX_PAGE = "page"; CTX_MESSAGE_ID = "messag
 
 # --- Helper Functions ---
 
-async def simple_async_test(update: Update, context: CallbackContext, message: str):
+def simple_async_test(update: Update, context: CallbackContext, message: str):
     log.info(f"simple_async_test: ENTERED! Message: '{message}', ChatID: {update.effective_chat.id if update and update.effective_chat else 'N/A'}")
     try:
         if update and update.effective_chat:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Async test successful: {message}")
+            context.bot.send_message(chat_id=update.effective_chat.id, text=f"Async test successful: {message}")
             log.info(f"simple_async_test: Message sent via context.bot.send_message!")
         else:
             log.error("simple_async_test: Update or effective_chat is None.")
@@ -113,7 +113,7 @@ def get_user_id_and_lang(update: Update, context: CallbackContext) -> tuple[int 
             
     return user_id, final_lang
 
-async def _send_or_edit_message(update: Update, context: CallbackContext, text: str, **kwargs):
+def _send_or_edit_message(update: Update, context: CallbackContext, text: str, **kwargs):
     user_id, lang = get_user_id_and_lang(update, context)
     log.info(f"_send_or_edit_message: START - User: {user_id}, Lang: {lang}, Text: '{html.escape(text[:70])}...', Kwargs: {kwargs}")
 
@@ -158,31 +158,31 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
             log.info(f"_send_or_edit_message: Attempting to EDIT message {query.message.message_id} in chat {chat_id}")
             try:
                 if query_id and not context.bot_data.get(f'answered_{query_id}', False):
-                    await query.answer()
+                    query.answer()
                     context.bot_data[f'answered_{query_id}'] = True
                     log.debug(f"_send_or_edit_message: Answered callback query {query_id}")
                 answered_callback = True
             except (BadRequest, TelegramError) as cb_e:
                 log.debug(f"_send_or_edit_message: Ignoring callback answer error: {cb_e}")
             
-            await context.bot.edit_message_text(chat_id=chat_id, message_id=query.message.message_id, text=text, **kwargs)
+            context.bot.edit_message_text(chat_id=chat_id, message_id=query.message.message_id, text=text, **kwargs)
             log.info(f"_send_or_edit_message: Successfully EDITED message {query.message.message_id}")
             context.user_data[CTX_MESSAGE_ID] = query.message.message_id
 
         elif update and update.message: 
             log.info(f"_send_or_edit_message: Attempting to REPLY to incoming message {update.message.message_id} in chat {chat_id}")
-            sent_message_object = await update.message.reply_text(text=text, **kwargs)
+            sent_message_object = update.message.reply_text(text=text, **kwargs)
             log.info(f"_send_or_edit_message: Successfully REPLIED with new message {sent_message_object.message_id if sent_message_object else 'N/A'}")
             if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
         
         elif message_id_to_edit and chat_id: 
             log.info(f"_send_or_edit_message: Attempting to EDIT message {message_id_to_edit} (from context) in chat {chat_id}")
-            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id_to_edit, text=text, **kwargs)
+            context.bot.edit_message_text(chat_id=chat_id, message_id=message_id_to_edit, text=text, **kwargs)
             log.info(f"_send_or_edit_message: Successfully EDITED message {message_id_to_edit} (from context)")
 
         else: 
             log.info(f"_send_or_edit_message: Attempting to SEND NEW message to chat {chat_id}")
-            sent_message_object = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            sent_message_object = context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
             log.info(f"_send_or_edit_message: Successfully SENT NEW message {sent_message_object.message_id if sent_message_object else 'N/A'}")
             if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
 
@@ -191,45 +191,22 @@ async def _send_or_edit_message(update: Update, context: CallbackContext, text: 
         if "message is not modified" in str(e).lower():
             log.debug(f"_send_or_edit_message: Ignoring 'message is not modified' error.")
             if query_id and not answered_callback and not context.bot_data.get(f'answered_{query_id}', False):
-                try: await query.answer(); context.bot_data[f'answered_{query_id}'] = True
+                try: query.answer(); context.bot_data[f'answered_{query_id}'] = True
                 except Exception: pass
         elif "message to edit not found" in str(e).lower() or "chat not found" in str(e).lower():
             log.warning(f"_send_or_edit_message: Failed to edit (target message/chat not found): {e}. Attempting to send new.")
             try:
                 if chat_id:
-                    sent_message_object = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-                    log.info(f"_send_or_edit_message: Fallback (edit failed) SENT NEW message {sent_message_object.message_id if sent_message_object else 'N/A'}")
+                    sent_message_object = context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+                    log.info(f"_send_or_edit_message: Successfully SENT NEW message {sent_message_object.message_id} after edit failed.")
                     if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
-            except Exception as send_e: log.error(f"_send_or_edit_message: Fallback (edit failed) SEND NEW also failed: {send_e}", exc_info=True)
-            context.user_data.pop(CTX_MESSAGE_ID, None)
-        elif "reply message not found" in str(e).lower():
-             log.warning(f"_send_or_edit_message: Failed reply (original message for reply not found): {e}. Attempting to send standalone.")
-             try:
-                 if chat_id:
-                     sent_message_object = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
-                     log.info(f"_send_or_edit_message: Fallback (reply failed) SENT NEW (standalone) message {sent_message_object.message_id if sent_message_object else 'N/A'}")
-                     if sent_message_object: context.user_data[CTX_MESSAGE_ID] = sent_message_object.message_id
-             except Exception as send_e: log.error(f"_send_or_edit_message: Fallback (reply failed) SEND NEW (standalone) also failed: {send_e}", exc_info=True)
-        else: 
-            log.error(f"_send_or_edit_message: Unhandled BadRequest: {e}. Sending generic error.")
-            if chat_id:
-                try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
-                except Exception as send_e: log.error(f"_send_or_edit_message: Failed to send generic error after BadRequest: {send_e}", exc_info=True)
-    except TelegramError as e:
-         log.error(f"_send_or_edit_message: TelegramError for user {user_id}, chat {chat_id}: {e}", exc_info=True)
-         if isinstance(e, RetryAfter): log.warning(f"_send_or_edit_message: Flood control - Wait {e.retry_after}s.")
-         if chat_id:
-             try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
-             except Exception as send_e: log.error(f"_send_or_edit_message: Failed to send generic error after TelegramError: {send_e}", exc_info=True)
+            except Exception as retry_e:
+                log.error(f"_send_or_edit_message: Final fallback send message failed: {retry_e}")
     except Exception as e:
-        log.error(f"_send_or_edit_message: UNEXPECTED Exception for user {user_id}, chat {chat_id}: {e}", exc_info=True)
-        if chat_id:
-            try: await context.bot.send_message(chat_id=chat_id, text=get_text(user_id, 'error_generic', lang=lang))
-            except Exception as send_e: log.error(f"_send_or_edit_message: Failed to send generic error after UNEXPECTED Exception: {send_e}", exc_info=True)
-    log.info(f"_send_or_edit_message: END - User: {user_id}")
+        log.error(f"_send_or_edit_message: Unexpected error for user {user_id}, chat {chat_id}: {e}", exc_info=True)
 
 
-async def _show_menu_async(update: Update, context: CallbackContext, menu_builder_func):
+def _show_menu_async(update: Update, context: CallbackContext, menu_builder_func):
     user_id, lang = get_user_id_and_lang(update, context)
     log.info(f"_show_menu_async: Building menu with {menu_builder_func.__name__} for user {user_id}, lang {lang}")
     message, markup, parse_mode = menu_builder_func(user_id, context)
@@ -237,7 +214,7 @@ async def _show_menu_async(update: Update, context: CallbackContext, menu_builde
         log.error(f"_show_menu_async: Menu builder {menu_builder_func.__name__} returned empty message for user {user_id}. Aborting send.")
         return
     log.info(f"_show_menu_async: Menu built. Message: '{html.escape(message[:70])}...'. Markup: {markup is not None}. ParseMode: {parse_mode}")
-    await _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode)
+    _send_or_edit_message(update, context, message, reply_markup=markup, parse_mode=parse_mode)
     log.info(f"_show_menu_async: Finished attempt to send/edit menu for user {user_id}")
 
 def error_handler(update: object, context: CallbackContext) -> None:
@@ -361,40 +338,26 @@ def start_command(update: Update, context: CallbackContext) -> str | int:
     clear_conversation_data(context)
     log.info(f"Start cmd: UserID={user_id}, User={update.effective_user.username if update.effective_user else 'N/A'}, Lang={lang}")
     
-    log.info(f"User {user_id} in start_command. Scheduling simple_async_test.")
-    context.dispatcher.run_async(simple_async_test, update, context, f"Hello from start_command, admin_status={is_admin(user_id)}!")
-    log.info(f"Start cmd: After scheduling simple_async_test for user {user_id}.")
-
-    # Original logic commented out for testing run_async
     if is_admin(user_id):
-        # log.info(f"Admin user {user_id} used /start, showing admin menu.")
-        # context.dispatcher.run_async(_show_menu_async, update, context, build_admin_menu)
-        return ConversationHandler.END # Keep END if admin to avoid falling into other states
-    # else:
-    #     client_info = db.find_client_by_user_id(user_id)
-    #     if client_info:
-    #         now_ts = int(datetime.now(UTC_TZ).timestamp())
-    #         if client_info['subscription_end'] < now_ts:
-    #             log.info(f"Client {user_id} subscription expired. Sending expiry message.")
-    #             context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'subscription_expired', lang=lang))
-    #             return ConversationHandler.END
-    #         else:
-    #             log.info(f"Client {user_id} identified. Showing client menu.")
-    #             context.dispatcher.run_async(_show_menu_async, update, context, build_client_menu)
-    #             return ConversationHandler.END
-    #     else:
-    #         log.info(f"Unknown user {user_id}. Sending welcome/code prompt.")
-    #         context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'welcome', lang=lang))
-    #         return STATE_WAITING_FOR_CODE
-    # For testing, let's just end the conversation or go to a known state if not admin.
-    # If simple_async_test works, we will restore the above.
-    if not is_admin(user_id):
-        # We need to return a valid state if the conversation is to continue for non-admins.
-        # For now, if the "welcome" message was supposed to be sent by simple_async_test,
-        # we can proceed to the state that expects the code.
-        # However, simple_async_test is generic, so we'll assume the welcome message part is on hold.
-        return STATE_WAITING_FOR_CODE # or ConversationHandler.END if you prefer start does nothing for non-admin in this test
-    return ConversationHandler.END
+        log.info(f"Admin user {user_id} used /start, showing admin menu.")
+        context.dispatcher.run_async(_show_menu_async, update, context, build_admin_menu)
+        return ConversationHandler.END
+    else:
+        client_info = db.find_client_by_user_id(user_id)
+        if client_info:
+            now_ts = int(datetime.now(UTC_TZ).timestamp())
+            if client_info['subscription_end'] < now_ts:
+                log.info(f"Client {user_id} subscription expired. Sending expiry message.")
+                context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'subscription_expired', lang=lang))
+                return ConversationHandler.END
+            else:
+                log.info(f"Client {user_id} identified. Showing client menu.")
+                context.dispatcher.run_async(_show_menu_async, update, context, build_client_menu)
+                return ConversationHandler.END
+        else:
+            log.info(f"Unknown user {user_id}. Sending welcome/code prompt.")
+            context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'welcome', lang=lang))
+            return STATE_WAITING_FOR_CODE
 
 
 async def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
@@ -429,20 +392,11 @@ def admin_command(update: Update, context: CallbackContext) -> str | int:
     
     if not is_admin(user_id): 
         log.warning(f"Unauthorized attempt to use /admin by UserID={user_id}")
-        # Send synchronously for this test path
-        try:
-            context.bot.send_message(chat_id=update.effective_chat.id, text=get_text(user_id, 'unauthorized', lang=lang))
-            log.info(f"Sent unauthorized message directly to user {user_id}")
-        except Exception as e:
-            log.error(f"Failed to send unauthorized message directly: {e}")
+        context.dispatcher.run_async(_send_or_edit_message, update, context, get_text(user_id, 'unauthorized', lang=lang))
         return ConversationHandler.END
     
-    log.info(f"Admin user {user_id} in admin_command. Scheduling simple_async_test.")
-    context.dispatcher.run_async(simple_async_test, update, context, "Hello from admin_command!")
-    # Temporarily comment out the actual menu display
-    # log.info(f"Admin user {user_id} showing admin menu.")
-    # context.dispatcher.run_async(_show_menu_async, update, context, build_admin_menu)
-    log.info(f"Admin cmd: After scheduling simple_async_test for admin {user_id}.")
+    log.info(f"Admin user {user_id} showing admin menu.")
+    context.dispatcher.run_async(_show_menu_async, update, context, build_admin_menu)
     return ConversationHandler.END
 
 def cancel_command(update: Update, context: CallbackContext) -> int:
