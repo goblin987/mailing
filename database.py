@@ -3,9 +3,10 @@
 # database.py
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from config import DB_PATH, UTC_TZ, SESSION_DIR, log # Import constants and logger
+import uuid
 
 # Use a reentrant lock to allow the same thread to acquire the lock multiple times if needed
 # Useful if one DB function calls another within the same thread.
@@ -1026,6 +1027,38 @@ def get_client_stats(user_id):
         }
     return None # Return None if client not found
 
+def generate_invite_code():
+    """Generates a unique 8-character invite code."""
+    try:
+        conn = _get_db_connection()
+        while True:
+            code = str(uuid.uuid4().hex)[:8]  # Generate 8-character code
+            with db_lock:
+                cursor = conn.cursor()
+                # Check if code already exists
+                cursor.execute("SELECT 1 FROM clients WHERE invitation_code = ?", (code,))
+                if not cursor.fetchone():
+                    return code
+    except sqlite3.Error as e:
+        log.error(f"DB Error generating invite code: {e}")
+        return None
+
+def store_invite_code(code, days):
+    """Stores a new invite code with subscription duration."""
+    try:
+        conn = _get_db_connection()
+        end_datetime = datetime.now(UTC_TZ) + timedelta(days=days)
+        sub_end_ts = int(end_datetime.timestamp())
+        
+        with db_lock:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO clients (invitation_code, subscription_end) VALUES (?, ?)",
+                         (code, sub_end_ts))
+            log.info(f"Successfully stored invite code {code} with {days} days duration")
+            return True
+    except sqlite3.Error as e:
+        log.error(f"DB Error storing invite code: {e}")
+        return False
 
 # --- Initialize DB on Import ---
 # Ensure schema is checked/created when the module is first imported.
