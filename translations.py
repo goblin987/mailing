@@ -245,6 +245,7 @@ translations = {
         'task_required_interval': "Interval",
 
         # --- Admin Panel ---
+        'admin_welcome': "<b>👑 Welcome to Admin Panel!</b>\n\nPlease use the menu below to manage the bot.",
         'admin_panel_title': "<b>👑 Admin Panel</b>",
         'admin_button_add_userbot': "🤖 Add Userbot",
         'admin_button_remove_userbot': "🗑️ Remove Userbot",
