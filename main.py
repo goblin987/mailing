@@ -113,12 +113,14 @@ async def main():
         log.critical("CRITICAL: Main conversation handler not found in handlers module!")
         sys.exit(1)
 
-    if handlers.error_handler:
-        # Register error handler
-        dp.add_error_handler(handlers.error_handler)
-        log.info("Error handler registered.")
-    else:
-        log.warning("Error handler not found in handlers module!")
+    # Register the new synchronous error handler
+    dp.add_error_handler(handlers.sync_error_handler)
+    log.info("Synchronous error handler registered.")
+    # if handlers.async_error_handler: # Keep the old registration commented out
+    #     dp.add_error_handler(handlers.async_error_handler)
+    #     log.info("Async error handler registered.")
+    # else:
+    #     log.warning("Async error handler not found in handlers module!")
 
     log.info("Handlers registered successfully.")
 
