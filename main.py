@@ -131,7 +131,7 @@ def main():
 
     if handlers.error_handler:
         # Register error handler
-        dp.add_error_handler(lambda u, c: asyncio.create_task(handlers.error_handler(u, c)))
+        dp.add_error_handler(handlers.error_handler)
         log.info("Error handler registered.")
     else:
         log.warning("Error handler not found in handlers module!")
