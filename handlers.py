@@ -1556,56 +1556,57 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
 # --- Main Conversation Handler ---
 main_conversation = ConversationHandler(
     entry_points=[
-        CommandHandler('start', start_command, filters=Filters.chat_type.private),
-        CommandHandler('admin', admin_command, filters=Filters.chat_type.private),
-        CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private),
-        CallbackQueryHandler(main_callback_handler)
+        CommandHandler('start', lambda u, c: asyncio.create_task(start_command(u, c)), filters=Filters.chat_type.private),
+        CommandHandler('admin', lambda u, c: asyncio.create_task(admin_command(u, c)), filters=Filters.chat_type.private),
+        CommandHandler('cancel', lambda u, c: asyncio.create_task(cancel_command(u, c)), filters=Filters.chat_type.private),
+        CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))
     ],
     states={
-        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_invitation_code)],
-        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_phone)],
-        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_id)],
-        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash)],
-        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_code)],
-        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_password)],
-        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_invite_details)],
-        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_name)],
-        STATE_WAITING_FOR_FOLDER_SELECTION: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, client_select_folder_to_edit_or_delete)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_join_group_links)],
-        STATE_WAITING_FOR_LANGUAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, set_language_handler)],
-        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_code)],
-        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_days)],
-        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_code)],
-        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_count)],
-        STATE_WAITING_FOR_FOLDER_ACTION: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, client_show_folder_edit_options)],
-        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'primary'))],
-        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'fallback'))],
-        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_start_time)],
-        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_message)],
-        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_schedule)],
-        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_target)],
-        STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler)],
-        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename)],
-        STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
-        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
-        STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_TASK_BOT: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_message)],
-        STATE_WAITING_FOR_TASK_SCHEDULE: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_TASK_TARGET: [CallbackQueryHandler(main_callback_handler)],
-        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(main_callback_handler)]
+        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_invitation_code(u, c)))],
+        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_phone(u, c)))],
+        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_api_id(u, c)))],
+        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_api_hash(u, c)))],
+        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_userbot_code(u, c)))],
+        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_userbot_password(u, c)))],
+        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_invite_details(u, c)))],
+        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_folder_name(u, c)))],
+        STATE_WAITING_FOR_FOLDER_SELECTION: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(client_select_folder_to_edit_or_delete(u, c)))],
+        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_join_group_links(u, c)))],
+        STATE_WAITING_FOR_LANGUAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(set_language_handler(u, c)))],
+        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_extend_code(u, c)))],
+        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_extend_days(u, c)))],
+        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_add_bots_code(u, c)))],
+        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_admin_add_bots_count(u, c)))],
+        STATE_WAITING_FOR_FOLDER_ACTION: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(client_show_folder_edit_options(u, c)))],
+        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_task_link(u, c, 'primary')))],
+        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_task_link(u, c, 'fallback')))],
+        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_task_start_time(u, c)))],
+        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(admin_process_task_message(u, c)))],
+        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(admin_process_task_schedule(u, c)))],
+        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(admin_process_task_target(u, c)))],
+        STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))],
+        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(process_folder_rename(u, c)))],
+        STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))],
+        STATE_TASK_SETUP: [CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))],
+        STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))],
+        STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))],
+        STATE_WAITING_FOR_TASK_BOT: [CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))],
+        STATE_WAITING_FOR_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(admin_process_task_message(u, c)))],
+        STATE_WAITING_FOR_TASK_SCHEDULE: [CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))],
+        STATE_WAITING_FOR_TASK_TARGET: [CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))],
+        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))]
     },
     fallbacks=[
-        CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private),
-        CommandHandler('start', start_command, filters=Filters.chat_type.private),
-        CommandHandler('admin', admin_command, filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)),
-        CallbackQueryHandler(main_callback_handler),
-        MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, conversation_fallback)
+        CommandHandler('cancel', lambda u, c: asyncio.create_task(cancel_command(u, c)), filters=Filters.chat_type.private),
+        CommandHandler('start', lambda u, c: asyncio.create_task(start_command(u, c)), filters=Filters.chat_type.private),
+        CommandHandler('admin', lambda u, c: asyncio.create_task(admin_command(u, c)), filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)),
+        CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c))),
+        MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(conversation_fallback(u, c)))
     ],
     name="main_conversation",
     persistent=True,
-    allow_reentry=True
+    allow_reentry=True,
+    per_message=True
 )
 
 log.info("Handlers module loaded with corrected sync/async definitions.")
@@ -1920,4 +1921,6 @@ async def admin_save_task(update: Update, context: CallbackContext) -> int:
             ]])
         )
         return ConversationHandler.END
+
+
 
