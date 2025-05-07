@@ -125,15 +125,11 @@ def build_client_menu(user_id, context: CallbackContext): # Sync
             last_error = bot_db_info['last_error'] if bot_db_info else None; display_name = html.escape(f"@{username}" if username else phone); status_icon = "⚪️" # Default icon
             if bot_db_info:
                 status = bot_db_info['status'] # Get status once
-                # Corrected if/elif block
-                if status == 'active':
-                    status_icon = "🟢"
-                elif status == 'error':
-                    status_icon = "🔴"
-                elif status in ['connecting', 'authenticating', 'initializing']:
-                    status_icon = "⏳"
-                elif status in ['needs_code', 'needs_password']:
-                    status_icon = "⚠️"
+                # CORRECTED if/elif block
+                if status == 'active': status_icon = "🟢"
+                elif status == 'error': status_icon = "🔴"
+                elif status in ['connecting', 'authenticating', 'initializing']: status_icon = "⏳"
+                elif status in ['needs_code', 'needs_password']: status_icon = "⚠️"
             menu_text += get_text(user_id, 'client_menu_userbot_line', lang_override=lang, index=i, status_icon=status_icon, display_name=display_name, status=html.escape(status_str)) + "\n"
             if last_error: escaped_error = html.escape(last_error); error_line = get_text(user_id, 'client_menu_userbot_error', lang_override=lang, error=f"{escaped_error[:100]}{'...' if len(escaped_error)>100 else ''}"); menu_text += f"  {error_line}\n"
     else: menu_text += get_text(user_id, 'client_menu_no_userbots', lang_override=lang) + "\n"
@@ -197,8 +193,12 @@ async def cancel_command(update: Update, context: CallbackContext) -> int:
 async def process_invitation_code(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context); code_input = update.message.text.strip(); log.info(f"Processing invitation code '{code_input}' for user {user_id}")
     client_info_db = db.find_client_by_user_id(user_id)
-    if client_info_db: now_ts = int(datetime.now(UTC_TZ).timestamp());
-        if client_info_db['subscription_end'] > now_ts: await send_or_edit_message(update, context, get_text(user_id, 'user_already_active', lang_override=lang)); await client_menu(update, context); return ConversationHandler.END
+    if client_info_db:
+        now_ts = int(datetime.now(UTC_TZ).timestamp())
+        if client_info_db['subscription_end'] > now_ts:
+            await send_or_edit_message(update, context, get_text(user_id, 'user_already_active', lang_override=lang))
+            await client_menu(update, context);
+            return ConversationHandler.END # End if already active
     success, reason_or_client_data = db.activate_client(code_input, user_id)
     if success:
         if reason_or_client_data == "activation_success":
@@ -959,8 +959,7 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
             try: await query.answer()
             except Exception: pass
         log.debug(f"main_callback_handler returning state: {next_state}")
-        # Ensure END is returned if sub-handler returns None or END
-        return ConversationHandler.END if next_state is None else next_state
+        return next_state # Return state or END as determined by sub-handler
     except Exception as e:
         log.error(f"Error in main_callback_handler for data '{data}': {e}", exc_info=True)
         if query and not query._answered:
@@ -1070,9 +1069,8 @@ async def handle_generic_callback(update: Update, context: CallbackContext) -> s
     if action == "cancel" or action == "confirm_no":
         await send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang_override=lang), reply_markup=None)
         clear_conversation_data(context); return ConversationHandler.END
-    elif action == "noop": return None
+    elif action == "noop": return None # Explicitly return None for no state change
     else: log.warning(f"Unhandled GENERIC CB: Action='{action}', Data='{data}'"); await send_or_edit_message(update,context,get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Generic action not recognized.")); return ConversationHandler.END
-
 
 # --- Conversation Handler Definition ---
 # THIS MUST BE AT THE END OF THE FILE, AFTER ALL HANDLER FUNCTIONS ARE DEFINED
@@ -1128,9 +1126,8 @@ main_conversation = ConversationHandler(
 
 log.info("Handlers module loaded and structure updated.")
 
-# --- Admin Task Management Handlers (Placeholders/Routing - Actual logic often in main_callback_handler now) ---
-# Ensure these exist if called by callbacks that aren't handled by main_callback_handler's routing
-# Example functions are included above in the full code.
+# --- Admin Task Management Handlers ---
+# (Keep definitions here as they are called by handle_admin_callback)
 async def admin_task_menu(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     if query: await query.answer()
@@ -1139,7 +1136,7 @@ async def admin_task_menu(update: Update, context: CallbackContext) -> int:
     await send_or_edit_message(update, context, get_text(user_id, 'admin_task_menu_title', lang_override=lang), reply_markup=markup)
     return ConversationHandler.END
 
-async def admin_view_tasks(update: Update, context: CallbackContext) -> int | None:
+async def admin_view_tasks(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     if query: await query.answer()
     user_id, lang = get_user_id_and_lang(update, context); current_page = 0
@@ -1159,7 +1156,7 @@ async def admin_view_tasks(update: Update, context: CallbackContext) -> int | No
     pagination_buttons = build_pagination_buttons(f"{CALLBACK_ADMIN_PREFIX}view_tasks", current_page, total_tasks, ITEMS_PER_PAGE, lang)
     keyboard.extend(pagination_buttons); keyboard.append([InlineKeyboardButton(get_text(user_id, 'button_back', lang_override=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}manage_tasks")])
     markup = InlineKeyboardMarkup(keyboard); await send_or_edit_message(update, context, text, reply_markup=markup, parse_mode=ParseMode.HTML)
-    return ConversationHandler.END # Return END as it's display only
+    return ConversationHandler.END
 
 async def admin_create_task_start(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
@@ -1220,53 +1217,3 @@ async def admin_delete_task_execute(update: Update, context: CallbackContext) ->
     if db.delete_admin_task(task_id): await send_or_edit_message(update, context, get_text(user_id, 'admin_task_deleted', lang_override=lang))
     else: await send_or_edit_message(update, context, get_text(user_id, 'admin_task_error', lang_override=lang))
     return await admin_view_tasks(update, context)
-
-
-# --- Conversation Handler Definition (Must be at the END) ---
-main_conversation = ConversationHandler(
-    entry_points=[
-        CommandHandler('start', start_command),
-        CommandHandler('admin', admin_command),
-        CommandHandler('cancel', cancel_command)
-    ],
-    states={
-        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command, process_invitation_code)],
-        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command, process_admin_phone)],
-        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_id)],
-        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_hash)],
-        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_code)],
-        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_password)],
-        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command, process_admin_invite_details)],
-        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_code)],
-        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_days)],
-        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_code)],
-        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_count)],
-        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command, process_join_group_links)],
-        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command, process_folder_rename)],
-        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'primary'))],
-        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'fallback'))],
-        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command, process_task_start_time)],
-        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_message)],
-        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_schedule)],
-        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_target)],
-        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
-        STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler)],
-        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_LANGUAGE: [CallbackQueryHandler(main_callback_handler)],
-    },
-    fallbacks=[
-        CommandHandler('cancel', cancel_command),
-        CallbackQueryHandler(main_callback_handler),
-        MessageHandler(Filters.all, conversation_fallback)
-    ],
-    name="main_conversation",
-    persistent=False,
-    allow_reentry=True
-)
-
-log.info("Handlers module loaded and structure updated.")
