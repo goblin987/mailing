@@ -256,10 +256,10 @@ async def start_command(update: Update, context: CallbackContext) -> int:
             )
             return ConversationHandler.END
         
-        # Check if user exists in database
-        client_info = db.find_client_by_user_id(user_id)
-        if client_info:
-            # Show client menu for existing users
+        # Check if user has an active subscription
+        client = db.find_client_by_user_id(user_id)
+        if client:
+            # User exists, show client menu
             menu_text, markup, parse_mode = build_client_menu(user_id, context)
             await send_or_edit_message(
                 update, context,
@@ -269,12 +269,7 @@ async def start_command(update: Update, context: CallbackContext) -> int:
             )
             return ConversationHandler.END
         
-        # For new users, ask for invitation code
-        await send_or_edit_message(
-            update, context,
-            get_text(user_id, 'welcome_new_user', lang=lang),
-            parse_mode=ParseMode.HTML
-        )
+        # New user, ask for invitation code
         await send_or_edit_message(
             update, context,
             get_text(user_id, 'ask_invitation_code', lang=lang),
@@ -284,7 +279,11 @@ async def start_command(update: Update, context: CallbackContext) -> int:
         
     except Exception as e:
         log.error(f"Error in start_command: {e}", exc_info=True)
-        await handle_command_error(update, context, e)
+        await send_or_edit_message(
+            update, context,
+            get_text(user_id, 'error_generic', lang=lang),
+            parse_mode=ParseMode.HTML
+        )
         return ConversationHandler.END
 
 async def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
@@ -1579,9 +1578,6 @@ main_conversation = ConversationHandler(
         CommandHandler('cancel', cancel_command)
     ],
     states={
-        ConversationHandler.WAITING: [
-            MessageHandler(Filters.text & ~Filters.command, conversation_fallback)
-        ],
         STATE_WAITING_FOR_CODE: [
             MessageHandler(Filters.text & ~Filters.command, process_invitation_code)
         ],
@@ -1619,46 +1615,38 @@ main_conversation = ConversationHandler(
             MessageHandler(Filters.text & ~Filters.command, process_folder_name)
         ],
         STATE_WAITING_FOR_GROUP_LINKS: [
-            MessageHandler(Filters.text & ~Filters.command, process_join_group_links)
+            MessageHandler(Filters.text & ~Filters.command, process_folder_links)
         ],
-        STATE_WAITING_FOR_LANGUAGE: [
-            CallbackQueryHandler(set_language_handler, pattern=f"^{CALLBACK_LANG_PREFIX}")
+        STATE_FOLDER_RENAME_PROMPT: [
+            MessageHandler(Filters.text & ~Filters.command, process_folder_rename)
         ],
-        STATE_WAITING_FOR_FOLDER_ACTION: [
-            CallbackQueryHandler(handle_folder_callback, pattern=f"^{CALLBACK_FOLDER_PREFIX}")
+        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [
+            MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'primary'))
         ],
-        STATE_WAITING_FOR_USERBOT_SELECTION: [
-            CallbackQueryHandler(handle_client_callback, pattern=f"^{CALLBACK_CLIENT_PREFIX}")
+        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [
+            MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'fallback'))
         ],
-        STATE_TASK_SETUP: [
-            CallbackQueryHandler(handle_task_callback, pattern=f"^{CALLBACK_TASK_PREFIX}")
+        STATE_WAITING_FOR_START_TIME: [
+            MessageHandler(Filters.text & ~Filters.command, process_task_start_time)
         ],
-        STATE_WAITING_FOR_TASK_BOT: [
-            CallbackQueryHandler(handle_task_callback, pattern=f"^{CALLBACK_TASK_PREFIX}")
-        ],
-        STATE_WAITING_FOR_TASK_MESSAGE: [
+        STATE_ADMIN_TASK_MESSAGE: [
             MessageHandler(Filters.text & ~Filters.command, admin_process_task_message)
         ],
-        STATE_WAITING_FOR_TASK_SCHEDULE: [
+        STATE_ADMIN_TASK_SCHEDULE: [
             MessageHandler(Filters.text & ~Filters.command, admin_process_task_schedule)
         ],
-        STATE_WAITING_FOR_TASK_TARGET: [
+        STATE_ADMIN_TASK_TARGET: [
             MessageHandler(Filters.text & ~Filters.command, admin_process_task_target)
-        ],
-        STATE_ADMIN_TASK_CONFIRM: [
-            CallbackQueryHandler(handle_task_callback, pattern=f"^{CALLBACK_TASK_PREFIX}")
         ]
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command),
-        MessageHandler(Filters.all, conversation_fallback),
-        CallbackQueryHandler(main_callback_handler)
+        CallbackQueryHandler(main_callback_handler),
+        MessageHandler(Filters.all, conversation_fallback)
     ],
     name="main_conversation",
     persistent=True,
-    allow_reentry=True,
-    per_message=True,
-    per_chat=True
+    allow_reentry=True
 )
 
 log.info("Handlers module loaded with corrected sync/async definitions.")
