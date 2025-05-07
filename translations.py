@@ -29,6 +29,7 @@ translations = {
         'error_timeout': "⏰ The operation timed out. Please try again.",
         'error_no_results': "ℹ️ No results found or action could not be completed.",
         'unauthorized': "🚫 You are not authorized to use this command.",
+        'not_admin': "🚫 This command is only available to administrators.",
         'command_in_private_chat': "ℹ️ Please use this command in a private chat with the bot.",
         'success': "✅ Success!",
         'cancelled': "❌ Operation cancelled.",
@@ -37,6 +38,22 @@ translations = {
         'state_cleared': "🔄 Action cancelled. Please restart the operation.",
         'unknown_user': "❓ I don't seem to have your active account details. Please use /start with a valid invitation code.",
         'subscription_expired': "⏳ Your subscription has expired. Please contact support to renew.",
+        'welcome_new_user': "👋 Welcome to the bot! To get started, you'll need an invitation code.",
+        'ask_invitation_code': "Please send your unique invitation code to activate your account (e.g., `a565ae57`). If you are an Admin, use /admin.",
+        'admin_welcome': "👑 Welcome to the Admin Panel!",
+        'admin_panel_title': "👑 Admin Panel",
+
+        # --- Admin Buttons ---
+        'admin_button_add_userbot': "➕ Add Userbot",
+        'admin_button_remove_userbot': "➖ Remove Userbot",
+        'admin_button_list_userbots': "🤖 List Userbots",
+        'admin_button_manage_tasks': "⚙️ Manage Tasks", # Placeholder, assumes admin tasks exist
+        'admin_button_view_tasks': "👁️ View Tasks",   # Placeholder, assumes admin tasks exist
+        'admin_button_gen_invite': "✉️ Generate Invite Code",
+        'admin_button_view_subs': "👥 View Subscriptions",
+        'admin_button_extend_sub': "⏳ Extend Subscription",
+        'admin_button_assign_bots_client': "🔗 Assign Bots to Client",
+        'admin_button_view_logs': "📜 View System Logs",
 
         # --- Buttons ---
         'button_back': "🔙 Back",
@@ -245,8 +262,6 @@ translations = {
         'task_required_interval': "Interval",
 
         # --- Admin Panel ---
-        'admin_welcome': "<b>👑 Welcome to Admin Panel!</b>\n\nPlease use the menu below to manage the bot.",
-        'admin_panel_title': "<b>👑 Admin Panel</b>",
         'admin_button_add_userbot': "🤖 Add Userbot",
         'admin_button_remove_userbot': "🗑️ Remove Userbot",
         'admin_button_list_userbots': "📋 List Userbots",
@@ -347,8 +362,6 @@ translations = {
         'internal_error_log': "An internal error occurred in state {state}. User: {user_id}. Error: {error}", # For logging only
 
         # Admin Task Management
-        'admin_button_manage_tasks': '📋 Manage Tasks',
-        'admin_button_view_tasks': '📊 View Tasks',
         'admin_task_list_title': '📋 Task List',
         'admin_task_list_empty': 'No tasks configured yet.',
         'admin_task_list_entry': '''
