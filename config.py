@@ -267,7 +267,7 @@ except pytz.UnknownTimeZoneError as e:
 
 # --- Conversation States ---
 # Using string constants for states can be clearer for debugging and persistence
-# There are 32 state variables listed below.
+# There are 33 state variables listed below.
 (
     STATE_WAITING_FOR_CODE, STATE_WAITING_FOR_PHONE, STATE_WAITING_FOR_API_ID,
     STATE_WAITING_FOR_API_HASH, STATE_WAITING_FOR_CODE_USERBOT,
@@ -295,9 +295,10 @@ except pytz.UnknownTimeZoneError as e:
     STATE_WAITING_FOR_TASK_BOT, # State for selecting bot for task
     STATE_WAITING_FOR_TASK_MESSAGE, # State for entering task message
     STATE_WAITING_FOR_TASK_SCHEDULE, # State for selecting task schedule
-    STATE_WAITING_FOR_TASK_TARGET # State for selecting task target
+    STATE_WAITING_FOR_TASK_TARGET, # State for selecting task target
+    STATE_ADMIN_TASK_CONFIRM # State for confirming admin task setup
     # Add any new states here if needed
-) = map(str, range(32)) # Updated count to 32 for new states
+) = map(str, range(33)) # Updated count to 33 for new states
 
 # --- Callback Data Prefixes ---
 # Using prefixes helps route callbacks efficiently in a single handler function
