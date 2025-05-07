@@ -275,6 +275,11 @@ async def start_command(update: Update, context: CallbackContext) -> int:
             get_text(user_id, 'welcome_new_user', lang=lang),
             parse_mode=ParseMode.HTML
         )
+        await send_or_edit_message(
+            update, context,
+            get_text(user_id, 'ask_invitation_code', lang=lang),
+            parse_mode=ParseMode.HTML
+        )
         return STATE_WAITING_FOR_CODE
         
     except Exception as e:
@@ -316,35 +321,41 @@ async def process_invitation_code(update: Update, context: CallbackContext) -> s
 # **MODIFIED HERE for simple_async_test**
 async def admin_command(update: Update, context: CallbackContext) -> int:
     """Handle /admin command."""
-    user_id, lang = get_user_id_and_lang(update, context)
-    log.info(f"Admin command received from user {user_id}")
-    
-    # Clear any previous conversation data
-    clear_conversation_data(context)
-    
-    # Store user ID and language in context
-    context.user_data[CTX_USER_ID] = user_id
-    context.user_data[CTX_LANG] = lang
-    
-    # Check if user is admin
-    if not is_admin(user_id):
-        log.warning(f"Unauthorized admin access attempt from user {user_id}")
+    try:
+        user_id, lang = get_user_id_and_lang(update, context)
+        log.info(f"Admin command received from user {user_id}")
+        
+        # Clear any previous conversation data
+        clear_conversation_data(context)
+        
+        # Store user ID and language in context
+        context.user_data[CTX_USER_ID] = user_id
+        context.user_data[CTX_LANG] = lang
+        
+        # Check if user is admin
+        if not is_admin(user_id):
+            log.warning(f"Unauthorized admin access attempt from user {user_id}")
+            await send_or_edit_message(
+                update, context,
+                get_text(user_id, 'error_not_admin', lang=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return ConversationHandler.END
+        
+        # Build and send admin menu
+        menu_text, markup, parse_mode = build_admin_menu(user_id, context)
         await send_or_edit_message(
             update, context,
-            get_text(user_id, 'error_not_admin', lang=lang),
-            parse_mode=ParseMode.HTML
+            menu_text,
+            reply_markup=markup,
+            parse_mode=parse_mode
         )
         return ConversationHandler.END
-    
-    # Build and send admin menu
-    menu_text, markup, parse_mode = build_admin_menu(user_id, context)
-    await send_or_edit_message(
-        update, context,
-        menu_text,
-        reply_markup=markup,
-        parse_mode=parse_mode
-    )
-    return ConversationHandler.END
+        
+    except Exception as e:
+        log.error(f"Error in admin_command: {e}", exc_info=True)
+        await handle_command_error(update, context, e)
+        return ConversationHandler.END
 
 async def cancel_command(update: Update, context: CallbackContext) -> int:
     """Cancel command handler."""
@@ -1568,28 +1579,75 @@ main_conversation = ConversationHandler(
         CommandHandler('cancel', cancel_command)
     ],
     states={
-        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command, process_invitation_code)],
-        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command, process_admin_phone)],
-        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_id)],
-        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_hash)],
-        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_code)],
-        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_password)],
-        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command, process_admin_invite_details)],
-        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_code)],
-        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_days)],
-        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_code)],
-        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_count)],
-        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command, process_join_group_links)],
-        STATE_WAITING_FOR_LANGUAGE: [CallbackQueryHandler(set_language_handler, pattern=f"^{CALLBACK_LANG_PREFIX}")],
-        STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(handle_folder_callback, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
-        STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(handle_client_callback, pattern=f"^{CALLBACK_CLIENT_PREFIX}")],
-        STATE_TASK_SETUP: [CallbackQueryHandler(handle_task_callback, pattern=f"^{CALLBACK_TASK_PREFIX}")],
-        STATE_WAITING_FOR_TASK_BOT: [CallbackQueryHandler(handle_task_callback, pattern=f"^{CALLBACK_TASK_PREFIX}")],
-        STATE_WAITING_FOR_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_message)],
-        STATE_WAITING_FOR_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_schedule)],
-        STATE_WAITING_FOR_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_target)],
-        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(handle_task_callback, pattern=f"^{CALLBACK_TASK_PREFIX}")]
+        ConversationHandler.WAITING: [
+            MessageHandler(Filters.text & ~Filters.command, conversation_fallback)
+        ],
+        STATE_WAITING_FOR_CODE: [
+            MessageHandler(Filters.text & ~Filters.command, process_invitation_code)
+        ],
+        STATE_WAITING_FOR_PHONE: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_phone)
+        ],
+        STATE_WAITING_FOR_API_ID: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_api_id)
+        ],
+        STATE_WAITING_FOR_API_HASH: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_api_hash)
+        ],
+        STATE_WAITING_FOR_CODE_USERBOT: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_code)
+        ],
+        STATE_WAITING_FOR_PASSWORD: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_password)
+        ],
+        STATE_WAITING_FOR_SUB_DETAILS: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_invite_details)
+        ],
+        STATE_WAITING_FOR_EXTEND_CODE: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_extend_code)
+        ],
+        STATE_WAITING_FOR_EXTEND_DAYS: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_extend_days)
+        ],
+        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_code)
+        ],
+        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [
+            MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_count)
+        ],
+        STATE_WAITING_FOR_FOLDER_NAME: [
+            MessageHandler(Filters.text & ~Filters.command, process_folder_name)
+        ],
+        STATE_WAITING_FOR_GROUP_LINKS: [
+            MessageHandler(Filters.text & ~Filters.command, process_join_group_links)
+        ],
+        STATE_WAITING_FOR_LANGUAGE: [
+            CallbackQueryHandler(set_language_handler, pattern=f"^{CALLBACK_LANG_PREFIX}")
+        ],
+        STATE_WAITING_FOR_FOLDER_ACTION: [
+            CallbackQueryHandler(handle_folder_callback, pattern=f"^{CALLBACK_FOLDER_PREFIX}")
+        ],
+        STATE_WAITING_FOR_USERBOT_SELECTION: [
+            CallbackQueryHandler(handle_client_callback, pattern=f"^{CALLBACK_CLIENT_PREFIX}")
+        ],
+        STATE_TASK_SETUP: [
+            CallbackQueryHandler(handle_task_callback, pattern=f"^{CALLBACK_TASK_PREFIX}")
+        ],
+        STATE_WAITING_FOR_TASK_BOT: [
+            CallbackQueryHandler(handle_task_callback, pattern=f"^{CALLBACK_TASK_PREFIX}")
+        ],
+        STATE_WAITING_FOR_TASK_MESSAGE: [
+            MessageHandler(Filters.text & ~Filters.command, admin_process_task_message)
+        ],
+        STATE_WAITING_FOR_TASK_SCHEDULE: [
+            MessageHandler(Filters.text & ~Filters.command, admin_process_task_schedule)
+        ],
+        STATE_WAITING_FOR_TASK_TARGET: [
+            MessageHandler(Filters.text & ~Filters.command, admin_process_task_target)
+        ],
+        STATE_ADMIN_TASK_CONFIRM: [
+            CallbackQueryHandler(handle_task_callback, pattern=f"^{CALLBACK_TASK_PREFIX}")
+        ]
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command),
@@ -1598,7 +1656,9 @@ main_conversation = ConversationHandler(
     ],
     name="main_conversation",
     persistent=True,
-    allow_reentry=True
+    allow_reentry=True,
+    per_message=True,
+    per_chat=True
 )
 
 log.info("Handlers module loaded with corrected sync/async definitions.")
