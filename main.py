@@ -16,6 +16,7 @@ import telethon_utils as telethon_api
 import handlers # Import handlers module (which contains main_conversation, error_handler)
 
 from telegram.ext import Updater, Dispatcher, PicklePersistence # Import PicklePersistence
+from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, Filters # Import CommandHandler, MessageHandler, CallbackQueryHandler, Filters
 
 # --- Global Variables ---
 # Flag to indicate if shutdown is in progress to prevent duplicate handling
@@ -122,6 +123,29 @@ def main():
     # --- Register Handlers ---
     log.info("Registering handlers...")
     if handlers.main_conversation:
+        # Set up the conversation handler with async support
+        handlers.main_conversation.entry_points = [
+            CommandHandler('start', handlers.start_command, filters=Filters.chat_type.private, run_async=True),
+            CommandHandler('admin', handlers.admin_command, filters=Filters.chat_type.private, run_async=True),
+            CommandHandler('cancel', handlers.cancel_command, filters=Filters.chat_type.private, run_async=True),
+            CallbackQueryHandler(handlers.main_callback_handler, run_async=True)
+        ]
+        
+        # Set up fallback handlers
+        handlers.main_conversation.fallbacks = [
+            CommandHandler('cancel', handlers.cancel_command, filters=Filters.chat_type.private, run_async=True),
+            CommandHandler('start', handlers.start_command, filters=Filters.chat_type.private, run_async=True),
+            CommandHandler('admin', handlers.admin_command, filters=Filters.chat_type.private & Filters.user(ADMIN_IDS), run_async=True),
+            CallbackQueryHandler(handlers.main_callback_handler, run_async=True),
+            MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, handlers.conversation_fallback, run_async=True)
+        ]
+        
+        # Update all state handlers to use run_async=True
+        for state in handlers.main_conversation.states:
+            for handler in handlers.main_conversation.states[state]:
+                if isinstance(handler, (CommandHandler, MessageHandler, CallbackQueryHandler)):
+                    handler.run_async = True
+        
         dp.add_handler(handlers.main_conversation)
         log.info("Main conversation handler registered.")
     else:
@@ -129,10 +153,10 @@ def main():
         sys.exit(1)
 
     if handlers.error_handler:
-         dp.add_error_handler(handlers.error_handler)
-         log.info("Error handler registered.")
+        dp.add_error_handler(handlers.error_handler)
+        log.info("Error handler registered.")
     else:
-         log.warning("Error handler not found in handlers module!")
+        log.warning("Error handler not found in handlers module!")
 
     log.info("Handlers registered successfully.")
 
