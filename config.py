@@ -21,6 +21,8 @@ SESSION_SUBDIR = 'sessions'
 LOG_FILENAME = 'bot.log'
 MAX_LOG_BYTES = 10 * 1024 * 1024  # Max log file size (10MB)
 LOG_BACKUP_COUNT = 5  # Number of old log files to keep
+ITEMS_PER_PAGE = 5 # For pagination in lists
+
 # Note: The 'groups_reached' stat in the DB might be unreliable/deprecated.
 
 # --- Compatibility Shim for imghdr ---
@@ -51,7 +53,11 @@ if sys.version_info >= (3, 11): # If Python 3.11 or newer
             if not buf: return None
             kind = filetype.guess(buf)
             if kind and kind.mime.startswith('image/'):
-                 return 'jpeg' if kind.extension == 'jpg' else kind.extension
+                 # Return common extensions recognized by older libraries
+                 ext = kind.extension.lower()
+                 if ext == 'jpg': return 'jpeg'
+                 if ext in ['png', 'gif', 'bmp', 'tiff', 'webp']: return ext
+                 return None # If not a common type imghdr might recognize
             return None
         except Exception as e:
              if _imghdr_compat_logger: # Use logger only if it has been initialized
@@ -84,7 +90,10 @@ else:
                 if not buf: return None
                 kind = filetype.guess(buf)
                 if kind and kind.mime.startswith('image/'):
-                     return 'jpeg' if kind.extension == 'jpg' else kind.extension
+                     ext = kind.extension.lower()
+                     if ext == 'jpg': return 'jpeg'
+                     if ext in ['png', 'gif', 'bmp', 'tiff', 'webp']: return ext
+                     return None
                 return None
             except Exception as e:
                  if _imghdr_compat_logger: _imghdr_compat_logger.warning(f"Error during 'what' (old Python shim) check: {e}")
@@ -124,12 +133,16 @@ def load_env_var(name, required=True, cast_func=str, default=None):
     return value # Return value (could be None if not required and no default)
 
 try:
-    API_ID = load_env_var('API_ID', required=True, cast_func=int)
-    API_HASH = load_env_var('API_HASH', required=True, cast_func=str)
+    API_ID_CLIENT = load_env_var('API_ID', required=True, cast_func=int) # Renamed to avoid conflict if userbot uses different creds
+    API_HASH_CLIENT = load_env_var('API_HASH', required=True, cast_func=str) # Renamed
     BOT_TOKEN = load_env_var('BOT_TOKEN', required=True, cast_func=str)
     admin_ids_str = load_env_var('ADMIN_IDS', required=False, cast_func=str, default='')
     # Ensure IDs are integers and handle potential whitespace/empty strings
     ADMIN_IDS = [int(id_.strip()) for id_ in admin_ids_str.split(',') if id_.strip().isdigit()]
+
+    # Added default API ID/Hash for userbots if not provided per-bot (less secure, optional)
+    DEFAULT_USERBOT_API_ID = load_env_var('DEFAULT_USERBOT_API_ID', required=False, cast_func=int, default=API_ID_CLIENT)
+    DEFAULT_USERBOT_API_HASH = load_env_var('DEFAULT_USERBOT_API_HASH', required=False, cast_func=str, default=API_HASH_CLIENT)
 
 
 except ValueError as e:
@@ -265,14 +278,14 @@ except pytz.UnknownTimeZoneError as e:
     log.critical(f"CRITICAL: Unknown timezone specified: {e}")
     sys.exit(1)
 
-# --- Conversation States ---
+# --- Conversation States (Moved here from handlers.py) ---
 # Using string constants for states can be clearer for debugging and persistence
-# There are 34 state variables listed below.
+# Count = 34
 (
     STATE_WAITING_FOR_CODE, STATE_WAITING_FOR_PHONE, STATE_WAITING_FOR_API_ID,
     STATE_WAITING_FOR_API_HASH, STATE_WAITING_FOR_CODE_USERBOT,
     STATE_WAITING_FOR_PASSWORD, STATE_WAITING_FOR_SUB_DETAILS,
-    STATE_WAITING_FOR_FOLDER_CHOICE, # Possibly deprecated
+    STATE_WAITING_FOR_FOLDER_CHOICE, # Possibly deprecated? Keep for now.
     STATE_WAITING_FOR_FOLDER_NAME,
     STATE_WAITING_FOR_FOLDER_SELECTION, # Used for edit/delete choice
     STATE_TASK_SETUP, # Main task config state
@@ -280,37 +293,63 @@ except pytz.UnknownTimeZoneError as e:
     STATE_WAITING_FOR_EXTEND_CODE,
     STATE_WAITING_FOR_EXTEND_DAYS, STATE_WAITING_FOR_ADD_USERBOTS_CODE,
     STATE_WAITING_FOR_ADD_USERBOTS_COUNT, STATE_SELECT_TARGET_GROUPS, # Selecting folder for task target
-    STATE_WAITING_FOR_USERBOT_SELECTION, # Used by join, task setup etc.
-    STATE_WAITING_FOR_GROUP_LINKS, # Used by join & folder add
-    STATE_WAITING_FOR_FOLDER_ACTION, # State after selecting folder to edit
-    STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK,
-    STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK,
-    STATE_FOLDER_EDIT_REMOVE_SELECT, # State for selecting groups to remove from folder
-    STATE_FOLDER_RENAME_PROMPT, # State waiting for new folder name
-    STATE_ADMIN_CONFIRM_USERBOT_RESET, # State for confirming userbot reset (Not currently used)
-    STATE_WAITING_FOR_START_TIME, # State for task start time input
-    STATE_ADMIN_TASK_MESSAGE, # State for entering admin task message
-    STATE_ADMIN_TASK_SCHEDULE, # State for entering admin task schedule
-    STATE_ADMIN_TASK_TARGET, # State for entering admin task target
-    STATE_WAITING_FOR_TASK_BOT, # State for selecting bot for task
-    STATE_WAITING_FOR_TASK_MESSAGE, # State for entering task message
-    STATE_WAITING_FOR_TASK_SCHEDULE, # State for selecting task schedule
-    STATE_WAITING_FOR_TASK_TARGET, # State for selecting task target
-    STATE_ADMIN_TASK_CONFIRM # State for confirming admin task setup
-    # Add any new states here if needed
-) = map(str, range(34)) # Updated count to 34 for new states
+    STATE_WAITING_FOR_USERBOT_SELECTION, # Used by join, task setup etc. menu callback
+    STATE_WAITING_FOR_GROUP_LINKS, # Used by join & folder add (message)
+    STATE_WAITING_FOR_FOLDER_ACTION, # State after selecting folder to edit (callback)
+    STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK, # (message)
+    STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK, # (message)
+    STATE_FOLDER_EDIT_REMOVE_SELECT, # State for selecting groups to remove from folder (callback)
+    STATE_FOLDER_RENAME_PROMPT, # State waiting for new folder name (message)
+    STATE_ADMIN_CONFIRM_USERBOT_RESET, # State for confirming userbot reset/delete (callback)
+    STATE_WAITING_FOR_START_TIME, # State for task start time input (message)
+    STATE_ADMIN_TASK_MESSAGE, # State for entering admin task message (message)
+    STATE_ADMIN_TASK_SCHEDULE, # State for entering admin task schedule (message)
+    STATE_ADMIN_TASK_TARGET, # State for entering admin task target (message)
+    STATE_WAITING_FOR_TASK_BOT, # State for selecting bot for admin task (callback)
+    STATE_WAITING_FOR_TASK_MESSAGE, # (Duplicate of ADMIN_TASK_MESSAGE?) - Keep ADMIN one
+    STATE_WAITING_FOR_TASK_SCHEDULE, # (Duplicate of ADMIN_TASK_SCHEDULE?) - Keep ADMIN one
+    STATE_WAITING_FOR_TASK_TARGET, # (Duplicate of ADMIN_TASK_TARGET?) - Keep ADMIN one
+    STATE_ADMIN_TASK_CONFIRM # State for confirming admin task setup (callback)
+) = map(str, range(34)) # Updated count to 34
+
+# --- Conversation Context Keys (Moved here from handlers.py) ---
+CTX_USER_ID = "_user_id"
+CTX_LANG = "_lang"
+CTX_PHONE = "phone"
+CTX_API_ID = "api_id"
+CTX_API_HASH = "api_hash"
+CTX_AUTH_DATA = "auth_data"
+CTX_INVITE_DETAILS = "invite_details" # Not actually used in provided code?
+CTX_EXTEND_CODE = "extend_code"
+CTX_ADD_BOTS_CODE = "add_bots_code"
+CTX_FOLDER_ID = "folder_id"
+CTX_FOLDER_NAME = "folder_name"
+CTX_FOLDER_ACTION = "folder_action" # Not actually used?
+CTX_SELECTED_BOTS = "selected_bots"
+CTX_TARGET_GROUP_IDS_TO_REMOVE = "target_group_ids_to_remove"
+CTX_TASK_PHONE = "task_phone" # Specific bot for client task setup
+CTX_TASK_SETTINGS = "task_settings" # Temp storage for client task settings
+CTX_PAGE = "page" # For pagination
+CTX_MESSAGE_ID = "message_id" # For editing messages
+# Admin Task Context Keys
+CTX_TASK_BOT = "task_bot" # Bot selected for admin task
+CTX_TASK_MESSAGE = "task_message" # Message content/link for admin task
+CTX_TASK_SCHEDULE = "task_schedule" # Schedule string for admin task
+CTX_TASK_TARGET = "task_target" # Target string for admin task
+CTX_TASK_TARGET_TYPE = "task_target_type" # 'all' or 'folder' for admin task
+CTX_TASK_TARGET_FOLDER = "task_target_folder" # Folder name if target_type is folder
 
 # --- Callback Data Prefixes ---
 # Using prefixes helps route callbacks efficiently in a single handler function
 CALLBACK_ADMIN_PREFIX = "admin_"
 CALLBACK_CLIENT_PREFIX = "client_"
-CALLBACK_TASK_PREFIX = "task_"
-CALLBACK_FOLDER_PREFIX = "folder_"
-CALLBACK_JOIN_PREFIX = "join_"
-CALLBACK_LANG_PREFIX = "lang_"
-# CALLBACK_REMOVE_PREFIX = "remove_" # Not used as a standalone prefix? Actions included in other prefixes.
-CALLBACK_INTERVAL_PREFIX = "interval_"
-CALLBACK_GENERIC_PREFIX = "generic_" # For simple actions like back buttons, confirmation, no-op
+CALLBACK_TASK_PREFIX = "task_"       # For client task setup callbacks
+CALLBACK_FOLDER_PREFIX = "folder_"   # For folder management callbacks
+CALLBACK_JOIN_PREFIX = "join_"       # For group joining callbacks
+CALLBACK_LANG_PREFIX = "lang_"       # For language selection callbacks
+CALLBACK_INTERVAL_PREFIX = "interval_" # For task interval selection
+CALLBACK_GENERIC_PREFIX = "generic_" # For simple actions like back, confirm, noop
+# Note: Admin task callbacks might use CALLBACK_ADMIN_PREFIX, e.g., "admin_task_options_"
 
 
 # --- Utility Functions ---
