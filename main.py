@@ -130,7 +130,8 @@ def main():
         sys.exit(1)
 
     if handlers.error_handler:
-        dp.add_error_handler(handlers.error_handler)
+        # Register error handler with run_async=True
+        dp.add_error_handler(handlers.error_handler, run_async=True)
         log.info("Error handler registered.")
     else:
         log.warning("Error handler not found in handlers module!")
