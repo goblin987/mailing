@@ -1,38 +1,38 @@
 # --- START OF FILE admin_handlers.py ---
 
 import html
-import re # Added for basic validation if needed
+import re # For potential validation
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext, ConversationHandler
 
-# Import shared constants and DB from their respective modules
+# Import shared constants, helpers, DB etc. from correct locations
 from config import (
     log, ADMIN_IDS, is_admin,
+    # States needed for transitions within this flow
     STATE_ADMIN_TASK_MESSAGE, STATE_ADMIN_TASK_SCHEDULE, STATE_ADMIN_TASK_TARGET,
-    STATE_ADMIN_TASK_CONFIRM, # Keep if confirmation step is used
-    CALLBACK_ADMIN_PREFIX,
-    # Import necessary context keys
+    STATE_ADMIN_TASK_CONFIRM,
+    # Context keys used
     CTX_TASK_BOT, CTX_TASK_MESSAGE, CTX_TASK_SCHEDULE, CTX_TASK_TARGET,
-    CTX_TASK_TARGET_TYPE, CTX_TASK_TARGET_FOLDER
+    CTX_TASK_TARGET_TYPE, CTX_TASK_TARGET_FOLDER,
+    CALLBACK_ADMIN_PREFIX
 )
 import database as db
 from translations import get_text
-
-# Import shared helpers from utils.py
 from utils import (
     get_user_id_and_lang,
-    send_or_edit_message,
-    clear_conversation_data
+    send_or_edit_message, # Use the helper from utils
+    clear_conversation_data # Use the helper from utils
 )
-# DO NOT import anything directly from handlers.py here
+
+# DO NOT import from handlers.py
 
 # --- Admin Task Creation State Handlers ---
 
 async def admin_process_task_message(update: Update, context: CallbackContext) -> int:
     """Handles receiving the message/link for an admin task."""
     user_id, lang = get_user_id_and_lang(update, context)
-    # No admin check needed if entry point is already admin protected
+    # No need for admin check if entry point is already admin protected
 
     message_text = update.message.text
     # Basic validation: check if message is empty
@@ -77,7 +77,7 @@ async def admin_process_task_target(update: Update, context: CallbackContext) ->
          return STATE_ADMIN_TASK_TARGET # Re-ask
 
     # We should have all pieces now: Bot, Message, Schedule, Target
-    bot_phone = context.user_data.get(CTX_TASK_BOT)
+    bot_phone = context.user_data.get(CTX_TASK_BOT) # Use correct context key constant
     message = context.user_data.get(CTX_TASK_MESSAGE)
     schedule = context.user_data.get(CTX_TASK_SCHEDULE)
 
@@ -101,7 +101,6 @@ async def admin_process_task_target(update: Update, context: CallbackContext) ->
         await send_or_edit_message(update, context, get_text(user_id, 'admin_task_created', lang_override=lang))
         log.info(f"Admin task {task_id} created by user {user_id}.")
         db.log_event_db("Admin Task Created", f"TaskID: {task_id}, Target: {target_text}", user_id=user_id, userbot_phone=bot_phone)
-
     else:
         await send_or_edit_message(update, context, get_text(user_id, 'admin_task_error', lang_override=lang))
         db.log_event_db("Admin Task Creation Failed", f"Target: {target_text}", user_id=user_id, userbot_phone=bot_phone)
@@ -110,9 +109,8 @@ async def admin_process_task_target(update: Update, context: CallbackContext) ->
     context.user_data.pop(CTX_TASK_BOT, None)
     context.user_data.pop(CTX_TASK_MESSAGE, None)
     context.user_data.pop(CTX_TASK_SCHEDULE, None)
-    context.user_data.pop(CTX_TASK_TARGET, None) # Clear target as well
+    context.user_data.pop(CTX_TASK_TARGET, None) # Clear target as well (though not strictly needed as it wasn't stored)
 
-    # Don't return admin_command - just end this specific flow.
-    # The user can navigate back to the main admin menu if needed.
+    # End the conversation. The user can use /admin again if needed.
     return ConversationHandler.END
 # --- END OF FILE admin_handlers.py ---
