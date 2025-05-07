@@ -189,16 +189,33 @@ def delete_session_files_for_phone(phone): # Renamed from _delete_session_file
 async def get_userbot_runtime_info_async(phone: str) -> dict:
     """Get runtime information for a userbot."""
     try:
-        runtime = get_runtime(phone)
+        runtime = get_userbot_runtime_info(phone)
         if not runtime:
             log.warning(f"get_userbot_runtime_info_async: No runtime found for {phone}")
             return None
         
-        info = await runtime.get_info()
-        log.info(f"get_userbot_runtime_info_async: Got info for {phone}: {info}")
-        return info
+        client = runtime['client']
+        if not client:
+            log.warning(f"get_userbot_runtime_info_async: No client found for {phone}")
+            return None
+        
+        try:
+            me = await client.get_me()
+            if me:
+                return {
+                    'id': me.id,
+                    'username': me.username,
+                    'phone': phone,
+                    'connected': client.is_connected()
+                }
+            else:
+                log.warning(f"get_userbot_runtime_info_async: get_me returned None for {phone}")
+                return None
+        except Exception as e:
+            log.error(f"get_userbot_runtime_info_async: Error getting user info for {phone}: {e}", exc_info=True)
+            return None
     except Exception as e:
-        log.error(f"get_userbot_runtime_info_async: Error getting info for {phone}: {e}", exc_info=True)
+        log.error(f"get_userbot_runtime_info_async: Error getting runtime info for {phone}: {e}", exc_info=True)
         return None
 
 async def submit_userbot_code_async(phone: str, code: str) -> dict:
@@ -982,19 +999,98 @@ async def run_check_tasks_periodically():
         except Exception as wait_e: log.error(f"Task check wait error: {wait_e}")
     log.info("Background task checker service stopped.")
 
-def initialize_all_userbots():
-    log.info("Initializing userbot runtimes...")
+async def initialize_all_userbots():
+    """Initialize all non-inactive userbots from the database."""
+    log.info("Starting initialization of all userbots...")
+    
     try:
-        all_bots = db.get_all_userbots(); init_count = 0; total_bots = 0
-        for bot in all_bots:
-            total_bots += 1
-            if bot['status'] != 'inactive':
-                phone = bot['phone_number']
-                if get_userbot_runtime_info(phone): init_count += 1
-            else: log.debug(f"Skipping inactive userbot {bot['phone_number']}.")
-        log.info(f"Finished initial runtime init. Attempted/Verified {init_count}/{total_bots} bots.")
-    except sqlite3.Error as e: log.critical(f"DB error during userbot loading: {e}", exc_info=True)
-    except Exception as e: log.critical(f"Unexpected error during userbot init: {e}", exc_info=True)
+        # Get all non-inactive userbots from database
+        userbots = db.get_all_userbots(exclude_status=['inactive'])
+        if not userbots:
+            log.info("No active userbots found in database.")
+            return
+        
+        # Initialize each userbot
+        for userbot in userbots:
+            phone = userbot['phone']
+            api_id = userbot['api_id']
+            api_hash = userbot['api_hash']
+            
+            try:
+                # Create new event loop for this userbot
+                loop = asyncio.new_event_loop()
+                
+                # Create session path
+                session_path = _get_session_path(phone)
+                
+                # Create client instance
+                client = await _create_telethon_client_instance(session_path, api_id, api_hash, loop)
+                
+                # Store runtime info
+                with _userbots_lock:
+                    _userbots[phone] = {
+                        'client': client,
+                        'loop': loop,
+                        'lock': threading.Lock(),
+                        'thread': None  # Will be set when thread starts
+                    }
+                
+                # Start client in its own thread
+                thread = threading.Thread(
+                    target=_run_loop,
+                    args=(loop, phone),
+                    name=f"UserBotThread-{phone}",
+                    daemon=True
+                )
+                thread.start()
+                
+                # Store thread reference
+                _userbots[phone]['thread'] = thread
+                
+                # Initial connection attempt
+                try:
+                    # Run connect in the client's event loop
+                    future = asyncio.run_coroutine_threadsafe(_safe_connect(client, phone), loop)
+                    connected = future.result(timeout=30)  # 30 second timeout
+                    
+                    if connected:
+                        # Get user info
+                        me_future = asyncio.run_coroutine_threadsafe(client.get_me(), loop)
+                        me = me_future.result(timeout=30)
+                        
+                        if me:
+                            # Update database with user info
+                            db.update_userbot(phone, {
+                                'username': me.username,
+                                'user_id': me.id,
+                                'status': 'active',
+                                'last_error': None
+                            })
+                            log.info(f"Userbot {phone} initialized successfully.")
+                        else:
+                            log.error(f"Could not get user info for {phone}")
+                            db.update_userbot_status(phone, 'error', "Failed to get user info")
+                    else:
+                        log.error(f"Could not connect userbot {phone}")
+                        # Status already updated by _safe_connect
+                
+                except asyncio.TimeoutError:
+                    log.error(f"Timeout while initializing userbot {phone}")
+                    db.update_userbot_status(phone, 'error', "Initialization timeout")
+                except Exception as e:
+                    log.error(f"Error during userbot {phone} initialization: {e}", exc_info=True)
+                    db.update_userbot_status(phone, 'error', f"Init error: {type(e).__name__}")
+            
+            except Exception as e:
+                log.error(f"Failed to initialize userbot {phone}: {e}", exc_info=True)
+                db.update_userbot_status(phone, 'error', f"Setup error: {type(e).__name__}")
+                continue
+    
+    except Exception as e:
+        log.error(f"Error during userbot initialization process: {e}", exc_info=True)
+        return False
+    
+    return True
 
 def shutdown_telethon():
     if _stop_event.is_set(): return
