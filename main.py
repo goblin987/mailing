@@ -72,7 +72,7 @@ def shutdown(signum, frame):
     os._exit(0) # Use os._exit for a more forceful exit if clean sys.exit fails
 
 # --- Main Function ---
-def main():
+async def main():
     """Main function to initialize and start the bot."""
     global updater, checker_thread, checker_loop # Make variables accessible to shutdown handler
 
@@ -142,7 +142,7 @@ def main():
     log.info("Initializing Telethon userbot runtimes...")
     try:
         # This function now attempts to start runtimes for all non-inactive bots in DB
-        telethon_api.initialize_all_userbots()
+        await telethon_api.initialize_all_userbots()
         log.info("Telethon userbot initialization process requested.")
     except Exception as e:
         # Log error but continue running - bot might function partially without all userbots
@@ -186,7 +186,6 @@ def main():
         log.critical(f"CRITICAL: Failed to start background task checker thread: {e}", exc_info=True)
         # Don't exit, but log critically. Bot may run without background tasks.
 
-
     # --- Register Signal Handlers ---
     log.info("Registering shutdown signal handlers (SIGTERM, SIGINT)...")
     try:
@@ -199,7 +198,6 @@ def main():
          # Try registering only SIGINT on Windows if possible
          try: signal.signal(signal.SIGINT, shutdown)
          except Exception: pass
-
 
     # --- Start Polling ---
     log.info("Starting PTB polling...")
@@ -219,6 +217,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # Ensure the script is run directly
-    main()
+    # Run the async main function
+    asyncio.run(main())
 # --- END OF FILE main.py ---
