@@ -244,12 +244,22 @@ async def start_command(update: Update, context: CallbackContext) -> str | int:
             
         # Check if user is admin
         if is_admin(user_id):
+            # Show admin welcome message and menu
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=get_text(user_id, 'admin_welcome', lang=lang),
                 parse_mode=ParseMode.HTML
             )
-            return STATE_WAITING_FOR_PHONE
+            
+            # Show admin menu
+            menu_text, markup, parse_mode = build_admin_menu(user_id, context)
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=menu_text,
+                reply_markup=markup,
+                parse_mode=parse_mode
+            )
+            return ConversationHandler.END
             
         # Check if user is already registered
         client_info = db.find_client_by_user_id(user_id)
@@ -266,7 +276,7 @@ async def start_command(update: Update, context: CallbackContext) -> str | int:
         # New user - ask for invitation code
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=get_text(user_id, 'welcome_new_user', lang=lang),
+            text=get_text(user_id, 'welcome', lang=lang),
             parse_mode=ParseMode.HTML
         )
         return STATE_WAITING_FOR_CODE
@@ -326,6 +336,13 @@ async def admin_command(update: Update, context: CallbackContext) -> str | int:
             )
             return ConversationHandler.END
             
+        # Show admin welcome message and menu
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=get_text(user_id, 'admin_welcome', lang=lang),
+            parse_mode=ParseMode.HTML
+        )
+        
         # Show admin menu
         menu_text, markup, parse_mode = build_admin_menu(user_id, context)
         await context.bot.send_message(
@@ -1557,7 +1574,7 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
 main_conversation = ConversationHandler(
     entry_points=[
         CommandHandler('start', lambda u, c: asyncio.create_task(start_command(u, c)), filters=Filters.chat_type.private),
-        CommandHandler('admin', lambda u, c: asyncio.create_task(admin_command(u, c)), filters=Filters.chat_type.private),
+        CommandHandler('admin', lambda u, c: asyncio.create_task(admin_command(u, c)), filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)),
         CommandHandler('cancel', lambda u, c: asyncio.create_task(cancel_command(u, c)), filters=Filters.chat_type.private),
         CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c)))
     ],
@@ -1599,7 +1616,7 @@ main_conversation = ConversationHandler(
     fallbacks=[
         CommandHandler('cancel', lambda u, c: asyncio.create_task(cancel_command(u, c)), filters=Filters.chat_type.private),
         CommandHandler('start', lambda u, c: asyncio.create_task(start_command(u, c)), filters=Filters.chat_type.private),
-        CommandHandler('admin', lambda u, c: asyncio.create_task(admin_command(u, c)), filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)),
+        CommandHandler('admin', lambda u, c: asyncio.create_task(admin_command(u, c)), filters=Filters.chat_type.private),
         CallbackQueryHandler(lambda u, c: asyncio.create_task(main_callback_handler(u, c))),
         MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: asyncio.create_task(conversation_fallback(u, c)))
     ],
