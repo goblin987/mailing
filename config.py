@@ -104,8 +104,6 @@ else:
 
 
 # --- Data Directory Setup ---
-# Use RENDER_DISK_PATH (persistent disk on Render) if set, otherwise DATA_DIR, otherwise default './data'
-# Ensure DATA_DIR_BASE is treated as the root for persistent storage.
 DATA_DIR_BASE = os.environ.get('RENDER_DISK_PATH', os.environ.get('DATA_DIR', './data'))
 DATA_DIR = os.path.abspath(DATA_DIR_BASE)
 DB_PATH = os.path.join(DATA_DIR, DB_FILENAME)
@@ -113,31 +111,26 @@ SESSION_DIR = os.path.join(DATA_DIR, SESSION_SUBDIR)
 
 
 # --- Environment Variable Loading & Validation ---
-# Defined early so logging setup can use it if needed
-# ** REMOVED log calls from this function **
 def load_env_var(name, required=True, cast_func=str, default=None):
     """Loads an environment variable, raises ValueError if required and missing."""
     value = os.environ.get(name)
     if value is None:
         if required and default is None:
             raise ValueError(f"CRITICAL: Required environment variable '{name}' is not set.")
-        value = default # Use default if not required or default is provided
-        # print(f"DEBUG: Env var '{name}' not set, using default: '{default}'") # Optional: Use print for debugging before logging is up
-    else: # Value exists
-        # print(f"DEBUG: Env var '{name}' found.") # Optional: Use print for debugging before logging is up
-        if cast_func: # Cast only if value exists and cast_func is provided
+        value = default
+    else:
+        if cast_func:
             try:
                 return cast_func(value)
             except ValueError as e:
                 raise ValueError(f"Environment variable '{name}' ('{value}') has invalid type for {cast_func.__name__}: {e}") from e
-    return value # Return value (could be None if not required and no default)
+    return value
 
 try:
     API_ID_CLIENT = load_env_var('API_ID', required=True, cast_func=int) # Renamed to avoid conflict if userbot uses different creds
     API_HASH_CLIENT = load_env_var('API_HASH', required=True, cast_func=str) # Renamed
     BOT_TOKEN = load_env_var('BOT_TOKEN', required=True, cast_func=str)
     admin_ids_str = load_env_var('ADMIN_IDS', required=False, cast_func=str, default='')
-    # Ensure IDs are integers and handle potential whitespace/empty strings
     ADMIN_IDS = [int(id_.strip()) for id_ in admin_ids_str.split(',') if id_.strip().isdigit()]
 
     # Added default API ID/Hash for userbots if not provided per-bot (less secure, optional)
@@ -146,20 +139,15 @@ try:
 
 
 except ValueError as e:
-    # Use basic print here as logging might not be fully configured yet
     print(f"CRITICAL: Configuration Error loading environment variables - {e}")
-    # Log to stderr as well, which Render might capture better initially
     sys.stderr.write(f"CRITICAL: Configuration Error loading environment variables - {e}\n")
-    sys.exit(1) # Exit immediately on critical config errors
+    sys.exit(1)
 
 # --- Logging Setup ---
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] - %(message)s')
 log_file_path = os.path.join(DATA_DIR, LOG_FILENAME)
 
-# Ensure data directory exists before setting up file handler
 try:
-    # DATA_DIR (/data on Render) must already exist or be creatable.
-    # If running on Render, RENDER_DISK_PATH should point to the mounted disk.
     if not os.path.isdir(DATA_DIR):
         print(f"Data directory '{DATA_DIR}' not found. Attempting to create...")
         try:
@@ -168,99 +156,69 @@ try:
         except OSError as e:
              print(f"CRITICAL: Failed to create data directory '{DATA_DIR}': {e}. Check permissions and RENDER_DISK_PATH.", file=sys.stderr)
              sys.exit(1)
-
-    # Optional: Check writability early (logging might not be fully set up)
     if not os.access(DATA_DIR, os.W_OK):
          print(f"WARNING: Data directory '{DATA_DIR}' is not writable! File logging and database operations might fail.", file=sys.stderr)
-
 except Exception as e:
     print(f"CRITICAL: Error during data directory check/creation: {e}", file=sys.stderr)
     sys.exit(1)
 
-
-# Now setup logging handlers
 file_handler = None
 try:
-    # Use RotatingFileHandler to prevent logs from growing indefinitely
     file_handler = logging.handlers.RotatingFileHandler(
         log_file_path, maxBytes=MAX_LOG_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
     )
     file_handler.setFormatter(log_formatter)
-    file_handler.setLevel(logging.INFO) # Log INFO level and above to file
+    file_handler.setLevel(logging.INFO)
 except PermissionError:
-     # Logging not set up yet, use print
      print(f"Warning: Permission denied writing log file to {log_file_path}. File logging disabled.", file=sys.stderr)
      file_handler = None
 except Exception as e:
     print(f"Warning: Could not set up file logging to {log_file_path}: {e}", file=sys.stderr)
     file_handler = None
 
-# Stream Handler (for console output, captured by Render)
-stream_handler = logging.StreamHandler(sys.stdout) # Explicitly use stdout
+stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
-# Set console level based on an environment variable? Default to DEBUG.
 log_level_str = os.environ.get('LOG_LEVEL', 'DEBUG').upper()
 log_level = getattr(logging, log_level_str, logging.DEBUG)
 stream_handler.setLevel(log_level)
 
-# Configure root logger
 handlers_list = [stream_handler]
 if file_handler:
     handlers_list.append(file_handler)
 
 logging.basicConfig(
-    level=logging.DEBUG, # Set root logger level to lowest (DEBUG) to allow handlers to filter effectively
+    level=logging.DEBUG,
     handlers=handlers_list,
-    format='%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] - %(message)s' # BasicConfig needs format too if setting here
+    format='%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] - %(message)s'
 )
-# --- Define the main log object HERE ---
-log = logging.getLogger(__name__) # Use __name__ (config) for the logger name for this file
-# --- Assign logger to imghdr shim now that it exists ---
+log = logging.getLogger(__name__)
 _imghdr_compat_logger = logging.getLogger('imghdr_compat')
 
-# --- Log initial config status AFTER logging is set up ---
 log.info(f"Logging configured. Stream level: {log_level_str}. File logging: {'Enabled' if file_handler else 'Disabled'}")
-if not ADMIN_IDS and admin_ids_str: # Log if input was given but non were valid ints
+if not ADMIN_IDS and admin_ids_str:
     log.warning(f"ADMIN_IDS provided ('{admin_ids_str}') but contained no valid integer IDs.")
 elif not ADMIN_IDS:
      log.warning("ADMIN_IDS environment variable is not set or empty. Admin features will be disabled.")
 
 
-# --- Ensure Session Subdirectory Exists (AFTER Logging is setup) ---
+# --- Ensure Session Subdirectory Exists ---
 try:
-    # DATA_DIR check repeated here now that logging is configured
     if not os.path.isdir(DATA_DIR):
         log.critical(f"CRITICAL: Data directory '{DATA_DIR}' does not exist or is not a directory! Check Render disk mount and RENDER_DISK_PATH env var.")
         sys.exit(1)
-
-    # Explicitly create the 'sessions' subdirectory if it doesn't exist.
     if not os.path.exists(SESSION_DIR):
         log.info(f"Session directory '{SESSION_DIR}' not found. Attempting to create...")
-        os.makedirs(SESSION_DIR, exist_ok=True) # exist_ok=True prevents error if dir exists
+        os.makedirs(SESSION_DIR, exist_ok=True)
         log.info(f"Created session directory: {SESSION_DIR}")
     elif not os.path.isdir(SESSION_DIR):
-         # Handle case where SESSION_DIR exists but is a file
          log.critical(f"CRITICAL: Path '{SESSION_DIR}' exists but is not a directory!")
          sys.exit(1)
-    else:
-        log.info(f"Session directory '{SESSION_DIR}' already exists.")
+    else: log.info(f"Session directory '{SESSION_DIR}' already exists.")
+    if not os.access(SESSION_DIR, os.W_OK): log.warning(f"Session directory '{SESSION_DIR}' might not be writable! Session file creation may fail.")
+    if not os.access(DATA_DIR, os.W_OK): log.warning(f"Data directory '{DATA_DIR}' might not be writable! Database file creation/write may fail.")
+except OSError as e: log.critical(f"CRITICAL: OSError ensuring directory '{SESSION_DIR}' exists/writable: {e}", exc_info=True); sys.exit(1)
+except Exception as e: log.critical(f"CRITICAL: Unexpected error setting up directories: {e}", exc_info=True); sys.exit(1)
 
-    # Check writability (optional but good diagnostic)
-    if not os.access(SESSION_DIR, os.W_OK):
-         log.warning(f"Session directory '{SESSION_DIR}' might not be writable! Session file creation may fail.")
-    if not os.access(DATA_DIR, os.W_OK):
-         log.warning(f"Data directory '{DATA_DIR}' might not be writable! Database file creation/write may fail.")
-
-except OSError as e:
-    # If os.makedirs fails with Permission Denied here, it's likely a disk permission issue.
-    log.critical(f"CRITICAL: OSError ensuring directory '{SESSION_DIR}' exists/writable: {e}", exc_info=True)
-    sys.exit(1)
-except Exception as e:
-    # Catch any other unexpected errors during setup
-    log.critical(f"CRITICAL: Unexpected error setting up directories: {e}", exc_info=True)
-    sys.exit(1)
-
-# Log basic config info AFTER directory setup and logging is confirmed working
 log.info("--- Bot Configuration Summary ---")
 log.info(f"Data Directory: {DATA_DIR}")
 log.info(f"Session Directory: {SESSION_DIR}")
@@ -278,84 +236,61 @@ except pytz.UnknownTimeZoneError as e:
     log.critical(f"CRITICAL: Unknown timezone specified: {e}")
     sys.exit(1)
 
-# --- Conversation States (Moved here from handlers.py) ---
-# Using string constants for states can be clearer for debugging and persistence
-# Count = 34
+# --- Conversation States ---
 (
     STATE_WAITING_FOR_CODE, STATE_WAITING_FOR_PHONE, STATE_WAITING_FOR_API_ID,
     STATE_WAITING_FOR_API_HASH, STATE_WAITING_FOR_CODE_USERBOT,
     STATE_WAITING_FOR_PASSWORD, STATE_WAITING_FOR_SUB_DETAILS,
-    STATE_WAITING_FOR_FOLDER_CHOICE, # Possibly deprecated? Keep for now.
+    STATE_WAITING_FOR_FOLDER_CHOICE,
     STATE_WAITING_FOR_FOLDER_NAME,
-    STATE_WAITING_FOR_FOLDER_SELECTION, # Used for edit/delete choice
-    STATE_TASK_SETUP, # Main task config state
-    STATE_WAITING_FOR_LANGUAGE, # Not really used as state, handled by callback
+    STATE_WAITING_FOR_FOLDER_SELECTION,
+    STATE_TASK_SETUP,
+    STATE_WAITING_FOR_LANGUAGE,
     STATE_WAITING_FOR_EXTEND_CODE,
     STATE_WAITING_FOR_EXTEND_DAYS, STATE_WAITING_FOR_ADD_USERBOTS_CODE,
-    STATE_WAITING_FOR_ADD_USERBOTS_COUNT, STATE_SELECT_TARGET_GROUPS, # Selecting folder for task target
-    STATE_WAITING_FOR_USERBOT_SELECTION, # Used by join, task setup etc. menu callback
-    STATE_WAITING_FOR_GROUP_LINKS, # Used by join & folder add (message)
-    STATE_WAITING_FOR_FOLDER_ACTION, # State after selecting folder to edit (callback)
-    STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK, # (message)
-    STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK, # (message)
-    STATE_FOLDER_EDIT_REMOVE_SELECT, # State for selecting groups to remove from folder (callback)
-    STATE_FOLDER_RENAME_PROMPT, # State waiting for new folder name (message)
-    STATE_ADMIN_CONFIRM_USERBOT_RESET, # State for confirming userbot reset/delete (callback)
-    STATE_WAITING_FOR_START_TIME, # State for task start time input (message)
-    STATE_ADMIN_TASK_MESSAGE, # State for entering admin task message (message)
-    STATE_ADMIN_TASK_SCHEDULE, # State for entering admin task schedule (message)
-    STATE_ADMIN_TASK_TARGET, # State for entering admin task target (message)
-    STATE_WAITING_FOR_TASK_BOT, # State for selecting bot for admin task (callback)
-    STATE_WAITING_FOR_TASK_MESSAGE, # (Duplicate of ADMIN_TASK_MESSAGE?) - Keep ADMIN one
-    STATE_WAITING_FOR_TASK_SCHEDULE, # (Duplicate of ADMIN_TASK_SCHEDULE?) - Keep ADMIN one
-    STATE_WAITING_FOR_TASK_TARGET, # (Duplicate of ADMIN_TASK_TARGET?) - Keep ADMIN one
-    STATE_ADMIN_TASK_CONFIRM # State for confirming admin task setup (callback)
-) = map(str, range(34)) # Updated count to 34
+    STATE_WAITING_FOR_ADD_USERBOTS_COUNT, STATE_SELECT_TARGET_GROUPS,
+    STATE_WAITING_FOR_USERBOT_SELECTION,
+    STATE_WAITING_FOR_GROUP_LINKS,
+    STATE_WAITING_FOR_FOLDER_ACTION,
+    STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK,
+    STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK,
+    STATE_FOLDER_EDIT_REMOVE_SELECT,
+    STATE_FOLDER_RENAME_PROMPT,
+    STATE_ADMIN_CONFIRM_USERBOT_RESET,
+    STATE_WAITING_FOR_START_TIME,
+    STATE_ADMIN_TASK_MESSAGE,
+    STATE_ADMIN_TASK_SCHEDULE,
+    STATE_ADMIN_TASK_TARGET,
+    STATE_WAITING_FOR_TASK_BOT,
+    STATE_WAITING_FOR_TASK_MESSAGE,
+    STATE_WAITING_FOR_TASK_SCHEDULE,
+    STATE_WAITING_FOR_TASK_TARGET,
+    STATE_ADMIN_TASK_CONFIRM
+) = map(str, range(34))
 
-# --- Conversation Context Keys (Moved here from handlers.py) ---
-CTX_USER_ID = "_user_id"
-CTX_LANG = "_lang"
-CTX_PHONE = "phone"
-CTX_API_ID = "api_id"
-CTX_API_HASH = "api_hash"
-CTX_AUTH_DATA = "auth_data"
-CTX_INVITE_DETAILS = "invite_details" # Not actually used in provided code?
-CTX_EXTEND_CODE = "extend_code"
-CTX_ADD_BOTS_CODE = "add_bots_code"
-CTX_FOLDER_ID = "folder_id"
-CTX_FOLDER_NAME = "folder_name"
-CTX_FOLDER_ACTION = "folder_action" # Not actually used?
-CTX_SELECTED_BOTS = "selected_bots"
-CTX_TARGET_GROUP_IDS_TO_REMOVE = "target_group_ids_to_remove"
-CTX_TASK_PHONE = "task_phone" # Specific bot for client task setup
-CTX_TASK_SETTINGS = "task_settings" # Temp storage for client task settings
-CTX_PAGE = "page" # For pagination
-CTX_MESSAGE_ID = "message_id" # For editing messages
-# Admin Task Context Keys
-CTX_TASK_BOT = "task_bot" # Bot selected for admin task
-CTX_TASK_MESSAGE = "task_message" # Message content/link for admin task
-CTX_TASK_SCHEDULE = "task_schedule" # Schedule string for admin task
-CTX_TASK_TARGET = "task_target" # Target string for admin task
-CTX_TASK_TARGET_TYPE = "task_target_type" # 'all' or 'folder' for admin task
-CTX_TASK_TARGET_FOLDER = "task_target_folder" # Folder name if target_type is folder
+# --- Conversation Context Keys ---
+CTX_USER_ID = "_user_id"; CTX_LANG = "_lang"; CTX_PHONE = "phone"; CTX_API_ID = "api_id"
+CTX_API_HASH = "api_hash"; CTX_AUTH_DATA = "auth_data"; CTX_INVITE_DETAILS = "invite_details"
+CTX_EXTEND_CODE = "extend_code"; CTX_ADD_BOTS_CODE = "add_bots_code"; CTX_FOLDER_ID = "folder_id"
+CTX_FOLDER_NAME = "folder_name"; CTX_FOLDER_ACTION = "folder_action"; CTX_SELECTED_BOTS = "selected_bots"
+CTX_TARGET_GROUP_IDS_TO_REMOVE = "target_group_ids_to_remove"; CTX_TASK_PHONE = "task_phone"
+CTX_TASK_SETTINGS = "task_settings"; CTX_PAGE = "page"; CTX_MESSAGE_ID = "message_id"
+CTX_TASK_BOT = "task_bot"; CTX_TASK_MESSAGE = "task_message"; CTX_TASK_SCHEDULE = "task_schedule"; CTX_TASK_TARGET = "task_target"; CTX_TASK_TARGET_TYPE = "task_target_type"; CTX_TASK_TARGET_FOLDER = "task_target_folder"
 
 # --- Callback Data Prefixes ---
-# Using prefixes helps route callbacks efficiently in a single handler function
 CALLBACK_ADMIN_PREFIX = "admin_"
 CALLBACK_CLIENT_PREFIX = "client_"
-CALLBACK_TASK_PREFIX = "task_"       # For client task setup callbacks
-CALLBACK_FOLDER_PREFIX = "folder_"   # For folder management callbacks
-CALLBACK_JOIN_PREFIX = "join_"       # For group joining callbacks
-CALLBACK_LANG_PREFIX = "lang_"       # For language selection callbacks
-CALLBACK_INTERVAL_PREFIX = "interval_" # For task interval selection
-CALLBACK_GENERIC_PREFIX = "generic_" # For simple actions like back, confirm, noop
-# Note: Admin task callbacks might use CALLBACK_ADMIN_PREFIX, e.g., "admin_task_options_"
+CALLBACK_TASK_PREFIX = "task_"
+CALLBACK_FOLDER_PREFIX = "folder_"
+CALLBACK_JOIN_PREFIX = "join_"
+CALLBACK_LANG_PREFIX = "lang_"
+CALLBACK_INTERVAL_PREFIX = "interval_"
+CALLBACK_GENERIC_PREFIX = "generic_"
 
 
 # --- Utility Functions ---
 def is_admin(user_id: int) -> bool:
     """Checks if a given user ID is in the ADMIN_IDS list."""
-    # Ensure ADMIN_IDS exists and user_id is an integer before checking
     return isinstance(user_id, int) and ADMIN_IDS and user_id in ADMIN_IDS
 
 log.info("Configuration loaded successfully.")
