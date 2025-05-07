@@ -1645,7 +1645,7 @@ main_conversation = ConversationHandler(
         MessageHandler(Filters.all, conversation_fallback)
     ],
     name="main_conversation",
-    persistent=True,
+    persistent=False,  # Changed from True to False
     allow_reentry=True
 )
 
