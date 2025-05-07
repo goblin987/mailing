@@ -232,7 +232,7 @@ def build_pagination_buttons(base_callback_data: str, current_page: int, total_i
     return buttons
 
 # **MODIFIED HERE for simple_async_test**
-def start_command(update: Update, context: CallbackContext) -> int:
+async def start_command(update: Update, context: CallbackContext) -> int:
     """Handle /start command."""
     try:
         user_id, lang = get_user_id_and_lang(update, context)
@@ -245,8 +245,7 @@ def start_command(update: Update, context: CallbackContext) -> int:
         
         if is_admin(user_id):
             menu_text, markup, parse_mode = build_admin_menu(user_id, context)
-            context.dispatcher.run_async(
-                send_or_edit_message,
+            await send_or_edit_message(
                 update, context,
                 menu_text,
                 reply_markup=markup,
@@ -257,8 +256,7 @@ def start_command(update: Update, context: CallbackContext) -> int:
         client = db.find_client_by_user_id(user_id)
         if client:
             menu_text, markup, parse_mode = build_client_menu(user_id, context)
-            context.dispatcher.run_async(
-                send_or_edit_message,
+            await send_or_edit_message(
                 update, context,
                 menu_text,
                 reply_markup=markup,
@@ -266,23 +264,26 @@ def start_command(update: Update, context: CallbackContext) -> int:
             )
             return ConversationHandler.END
         
-        context.dispatcher.run_async(
-            send_or_edit_message,
+        await send_or_edit_message(
             update, context,
             get_text(user_id, 'ask_invitation_code', lang=lang),
             parse_mode=ParseMode.HTML
         )
-        return STATE_WAITING_FOR_CODE
+        # If user is new, we transition to the conversation handler to wait for the code
+        return STATE_WAITING_FOR_CODE 
         
     except Exception as e:
         log.error(f"Error in start_command: {e}", exc_info=True)
         user_id, lang = get_user_id_and_lang(update, context) # Ensure lang is available
-        context.dispatcher.run_async(
-            send_or_edit_message,
-            update, context,
-            get_text(user_id, 'error_generic', lang=lang),
-            parse_mode=ParseMode.HTML
-        )
+        # Use await here as well, assuming send_or_edit_message is async
+        try:
+            await send_or_edit_message(
+                update, context,
+                get_text(user_id, 'error_generic', lang=lang),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as send_err:
+            log.error(f"Failed to send error message in start_command handler: {send_err}")
         return ConversationHandler.END
 
 async def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
@@ -317,7 +318,7 @@ async def process_invitation_code(update: Update, context: CallbackContext) -> s
     return await client_menu(update, context)
 
 # **MODIFIED HERE for simple_async_test**
-def admin_command(update: Update, context: CallbackContext) -> int:
+async def admin_command(update: Update, context: CallbackContext) -> int:
     """Handle /admin command."""
     try:
         user_id, lang = get_user_id_and_lang(update, context)
@@ -330,8 +331,7 @@ def admin_command(update: Update, context: CallbackContext) -> int:
         
         if not is_admin(user_id): 
             log.warning(f"Unauthorized admin access attempt from user {user_id}")
-            context.dispatcher.run_async(
-                send_or_edit_message,
+            await send_or_edit_message(
                 update, context,
                 get_text(user_id, 'error_not_admin', lang=lang),
                 parse_mode=ParseMode.HTML
@@ -339,8 +339,7 @@ def admin_command(update: Update, context: CallbackContext) -> int:
             return ConversationHandler.END
     
         menu_text, markup, parse_mode = build_admin_menu(user_id, context)
-        context.dispatcher.run_async(
-            send_or_edit_message,
+        await send_or_edit_message(
             update, context,
             menu_text,
             reply_markup=markup,
@@ -351,12 +350,15 @@ def admin_command(update: Update, context: CallbackContext) -> int:
     except Exception as e:
         log.error(f"Error in admin_command: {e}", exc_info=True)
         user_id, lang = get_user_id_and_lang(update, context) # Ensure lang is available
-        context.dispatcher.run_async(
-            send_or_edit_message,
-            update, context,
-            get_text(user_id, 'error_generic', lang=lang),
-            parse_mode=ParseMode.HTML
-        )
+        # Use await here as well
+        try:
+             await send_or_edit_message(
+                 update, context,
+                 get_text(user_id, 'error_generic', lang=lang),
+                 parse_mode=ParseMode.HTML
+             )
+        except Exception as send_err:
+             log.error(f"Failed to send error message in admin_command handler: {send_err}")
         return ConversationHandler.END
 
 async def cancel_command(update: Update, context: CallbackContext) -> int:
