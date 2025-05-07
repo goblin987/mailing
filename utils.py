@@ -43,17 +43,19 @@ async def _show_menu_async(update: Update, context: CallbackContext, menu_builde
 
 async def send_or_edit_message(update: Update, context: CallbackContext, text: str, **kwargs):
     """Send a new message or edit the existing one based on context."""
+    log.debug(f"[send_or_edit_message] ENTERED. Target Text: {text[:50]}... Kwargs: {kwargs}")
+    message = None # Initialize message variable
     try:
-        # Get the chat ID and message ID from context if available
         chat_id = update.effective_chat.id if update and update.effective_chat else None
         message_id = context.user_data.get('_message_id') if context and context.user_data else None
+        log.debug(f"[send_or_edit_message] ChatID: {chat_id}, Existing MessageID: {message_id}")
         
         if not chat_id:
-            log.error("No chat_id available for sending/editing message")
+            log.error("[send_or_edit_message] No chat_id available. Cannot send/edit.")
             return None
         
-        # Try to edit existing message if we have a message_id
         if message_id:
+            log.debug(f"[send_or_edit_message] Attempting to EDIT message {message_id} in chat {chat_id}")
             try:
                 message = await context.bot.edit_message_text(
                     chat_id=chat_id,
@@ -61,33 +63,40 @@ async def send_or_edit_message(update: Update, context: CallbackContext, text: s
                     text=text,
                     **kwargs
                 )
+                log.info(f"[send_or_edit_message] Successfully EDITED message {message_id}")
                 return message
+            except BadRequest as e:
+                log.warning(f"[send_or_edit_message] BadRequest editing message {message_id}: {e}. Will try sending new.")
+                # Clear invalid message_id
+                if 'message to edit not found' in str(e) or 'message identifier not specified' in str(e):
+                     if context and context.user_data: context.user_data.pop('_message_id', None)
+                message_id = None # Force sending new message
             except Exception as e:
-                log.warning(f"Could not edit message {message_id}: {e}")
-                # Fall through to sending new message
+                log.warning(f"[send_or_edit_message] Generic error editing message {message_id}: {e}. Will try sending new.")
+                if context and context.user_data: context.user_data.pop('_message_id', None)
+                message_id = None # Force sending new message
         
-        # Send new message
-        message = await context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            **kwargs
-        )
+        # If no message_id or editing failed, send a new message
+        if not message:
+             log.debug(f"[send_or_edit_message] Attempting to SEND new message to chat {chat_id}")
+             try:
+                 message = await context.bot.send_message(
+                     chat_id=chat_id,
+                     text=text,
+                     **kwargs
+                 )
+                 log.info(f"[send_or_edit_message] Successfully SENT new message. ID: {message.message_id if message else 'N/A'}")
+                 # Store new message ID for potential future edits
+                 if message and context and context.user_data is not None:
+                     context.user_data['_message_id'] = message.message_id
+                     log.debug(f"[send_or_edit_message] Stored new message ID {message.message_id} in context.")
+             except Exception as send_e:
+                  log.error(f"[send_or_edit_message] Failed to SEND new message: {send_e}", exc_info=True)
+                  # Don't try to send another error message from here, avoid loops.
+                  return None # Indicate failure
         
-        # Store message ID in context for future edits
-        if context and context.user_data is not None:
-            context.user_data['_message_id'] = message.message_id
-        
-        return message
+        return message # Return the sent or edited message object, or None if sending failed
         
     except Exception as e:
-        log.error(f"Error in send_or_edit_message: {e}", exc_info=True)
-        # Try to send error message without any fancy features
-        try:
-            if chat_id:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="Error sending message. Please try again."
-                )
-        except:
-            pass
+        log.error(f"[send_or_edit_message] Unexpected error OUTSIDE send/edit block: {e}", exc_info=True)
         return None 
