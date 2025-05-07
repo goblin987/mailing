@@ -101,14 +101,30 @@ def clear_conversation_data(context: CallbackContext):
         
     log.debug(f"Cleared volatile conversation user_data for user {user_id or 'N/A'}")
 
-async def error_handler(update: object, context: CallbackContext) -> None:
+# --- Synchronous Error Handler (for testing) ---
+def sync_error_handler(update: object, context: CallbackContext) -> None:
+    """Log the error (synchronous version for testing)."""
+    log.error(msg="[sync_error_handler] Exception while handling an update:", exc_info=context.error)
+    # Optionally, try sending a *synchronous* simple message if possible, but focus on logging.
+    # Avoid async calls here.
+    if isinstance(update, Update) and update.effective_chat:
+        try:
+            # This might still fail depending on context state, but it's sync
+            # context.bot.send_message(update.effective_chat.id, "An error occurred.")
+            pass # Let's just log for now to minimize complexity
+        except Exception as e:
+            log.error(f"[sync_error_handler] Failed to send sync error message: {e}")
+
+# --- Original Async Error Handler (keep for reference or potential revert) ---
+async def async_error_handler(update: object, context: CallbackContext) -> None:
     """Log the error and send a telegram message to notify the developer."""
-    log.error(msg="Exception while handling an update:", exc_info=context.error)
+    log.error(msg="[async_error_handler] Exception while handling an update:", exc_info=context.error)
     
+    # ... (rest of the original async error handler code) ...
+    # (Keep the original code commented out or renamed)
+    user_id = None
+    chat_id = None
     try:
-        user_id = None
-        chat_id = None
-        
         if isinstance(update, Update):
             if update.effective_user:
                 user_id = update.effective_user.id
@@ -119,11 +135,11 @@ async def error_handler(update: object, context: CallbackContext) -> None:
             chat_id = user_id
             
         if chat_id:
-            log.info(f"error_handler: Attempting to send generic error to user {user_id}, chat {chat_id}")
+            log.info(f"[async_error_handler] Attempting to send generic error to user {user_id}, chat {chat_id}")
             error_message = get_text(user_id, 'error_generic', lang=context.user_data.get('_lang', 'en'))
             await context.bot.send_message(chat_id=chat_id, text=error_message)
     except Exception as e:
-        log.error(f"error_handler: Failed to send error message: {e}", exc_info=True)
+        log.error(f"[async_error_handler] Failed to send async error message: {e}", exc_info=True)
 
 def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> str:
     if not timestamp: return get_text(0, 'task_value_not_set', lang='en') 
