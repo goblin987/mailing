@@ -84,35 +84,13 @@ async def main():
     # --- Initialize PTB ---
     log.info("Initializing PTB Updater...")
     try:
-        # Enable persistence
-        persistence_path = os.path.join(DATA_DIR, 'bot_persistence.pickle')
-        log.info(f"Using persistence file: {persistence_path}")
+        # Disable persistence for diagnostics
+        # persistence_path = os.path.join(DATA_DIR, 'bot_persistence.pickle')
+        # log.info(f"Using persistence file: {persistence_path}")
+        # persistence = PicklePersistence(filename=persistence_path)
         
-        try:
-            persistence = PicklePersistence(filename=persistence_path)
-            updater = Updater(token=BOT_TOKEN, use_context=True, persistence=persistence)
-            log.info("PTB Updater initialized with persistence.")
-        except (EOFError, TypeError) as e:
-            log.warning(f"Failed to load persistence file, it may be corrupted: {e}")
-            # Backup the old file if it exists
-            if os.path.exists(persistence_path):
-                backup_path = persistence_path + '.backup'
-                try:
-                    os.rename(persistence_path, backup_path)
-                    log.info(f"Backed up corrupted persistence file to {backup_path}")
-                except Exception as backup_err:
-                    log.error(f"Failed to backup persistence file: {backup_err}")
-                    # If we can't backup, try to remove it
-                    try:
-                        os.remove(persistence_path)
-                        log.info("Removed corrupted persistence file")
-                    except Exception as rm_err:
-                        log.error(f"Failed to remove persistence file: {rm_err}")
-            
-            # Create new persistence instance
-            persistence = PicklePersistence(filename=persistence_path)
-            updater = Updater(token=BOT_TOKEN, use_context=True, persistence=persistence)
-            log.info("PTB Updater initialized with fresh persistence file.")
+        updater = Updater(token=BOT_TOKEN, use_context=True, persistence=None) # Set persistence=None
+        log.info("PTB Updater initialized WITHOUT persistence.")
             
     except Exception as e:
         log.critical(f"CRITICAL: Failed to initialize PTB Updater: {e}", exc_info=True)
