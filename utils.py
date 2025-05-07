@@ -111,3 +111,17 @@ def send_or_edit_message(update: Update, context: CallbackContext, text: str, **
     except Exception as e:
         log.error(f"Error sending/editing message to {chat_id}: {e}", exc_info=True)
         return None 
+
+async def _show_menu_async(update: Update, context: CallbackContext, menu_builder_func):
+    """
+    Asynchronously shows a menu using the provided menu builder function.
+    """
+    user_id, lang = get_user_id_and_lang(update, context)
+    title, markup, parse_mode = menu_builder_func(user_id, context)
+    await _send_or_edit_message(update, context, title, reply_markup=markup, parse_mode=parse_mode)
+
+async def _send_or_edit_message(update: Update, context: CallbackContext, text: str, **kwargs):
+    """
+    Asynchronous version of send_or_edit_message.
+    """
+    return await context.bot.run_async(send_or_edit_message, update, context, text, **kwargs) 
