@@ -1506,6 +1506,10 @@ main_conversation = ConversationHandler(
         STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler, run_async=True)],
         STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler, run_async=True)],
         STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_WAITING_FOR_TASK_BOT: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_WAITING_FOR_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_message, run_async=True)],
+        STATE_WAITING_FOR_TASK_SCHEDULE: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_WAITING_FOR_TASK_TARGET: [CallbackQueryHandler(main_callback_handler, run_async=True)]
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private, run_async=True),
@@ -1741,5 +1745,4 @@ async def handle_command_error(update: Update, context: CallbackContext, error: 
     log.error(f"Error in command handler: {error}", exc_info=True)
     await error_handler(update, context)
     return ConversationHandler.END
-
 
