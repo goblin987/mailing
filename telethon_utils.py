@@ -186,6 +186,51 @@ def delete_session_files_for_phone(phone): # Renamed from _delete_session_file
 
 
 # --- Public Userbot Runtime Functions ---
+async def get_userbot_runtime_info_async(phone: str) -> dict:
+    """Get runtime information for a userbot."""
+    try:
+        runtime = get_runtime(phone)
+        if not runtime:
+            log.warning(f"get_userbot_runtime_info_async: No runtime found for {phone}")
+            return None
+        
+        info = await runtime.get_info()
+        log.info(f"get_userbot_runtime_info_async: Got info for {phone}: {info}")
+        return info
+    except Exception as e:
+        log.error(f"get_userbot_runtime_info_async: Error getting info for {phone}: {e}", exc_info=True)
+        return None
+
+async def submit_userbot_code_async(phone: str, code: str) -> dict:
+    """Submit verification code for userbot authentication."""
+    try:
+        runtime = get_runtime(phone)
+        if not runtime:
+            log.warning(f"submit_userbot_code_async: No runtime found for {phone}")
+            return {'success': False, 'error': 'No runtime found'}
+        
+        result = await runtime.submit_code(code)
+        log.info(f"submit_userbot_code_async: Code submission result for {phone}: {result}")
+        return result
+    except Exception as e:
+        log.error(f"submit_userbot_code_async: Error submitting code for {phone}: {e}", exc_info=True)
+        return {'success': False, 'error': str(e)}
+
+async def submit_userbot_password_async(phone: str, password: str) -> dict:
+    """Submit 2FA password for userbot authentication."""
+    try:
+        runtime = get_runtime(phone)
+        if not runtime:
+            log.warning(f"submit_userbot_password_async: No runtime found for {phone}")
+            return {'success': False, 'error': 'No runtime found'}
+        
+        result = await runtime.submit_password(password)
+        log.info(f"submit_userbot_password_async: Password submission result for {phone}: {result}")
+        return result
+    except Exception as e:
+        log.error(f"submit_userbot_password_async: Error submitting password for {phone}: {e}", exc_info=True)
+        return {'success': False, 'error': str(e)}
+
 def get_userbot_runtime_info(phone_number):
     """Gets or initializes the runtime environment (client, loop, thread) for a userbot."""
     with _userbots_lock:
