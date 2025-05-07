@@ -232,23 +232,21 @@ def build_pagination_buttons(base_callback_data: str, current_page: int, total_i
     return buttons
 
 # **MODIFIED HERE for simple_async_test**
-async def start_command(update: Update, context: CallbackContext) -> int:
+def start_command(update: Update, context: CallbackContext) -> int:
     """Handle /start command."""
     try:
         user_id, lang = get_user_id_and_lang(update, context)
         log.info(f"Start command received from user {user_id}")
         
-        # Clear any previous conversation data
         clear_conversation_data(context)
         
-        # Store user ID and language in context
         context.user_data[CTX_USER_ID] = user_id
         context.user_data[CTX_LANG] = lang
         
-        # Check if user is admin
         if is_admin(user_id):
             menu_text, markup, parse_mode = build_admin_menu(user_id, context)
-            await send_or_edit_message(
+            context.dispatcher.run_async(
+                send_or_edit_message,
                 update, context,
                 menu_text,
                 reply_markup=markup,
@@ -256,12 +254,11 @@ async def start_command(update: Update, context: CallbackContext) -> int:
             )
             return ConversationHandler.END
         
-        # Check if user has an active subscription
         client = db.find_client_by_user_id(user_id)
         if client:
-            # User exists, show client menu
             menu_text, markup, parse_mode = build_client_menu(user_id, context)
-            await send_or_edit_message(
+            context.dispatcher.run_async(
+                send_or_edit_message,
                 update, context,
                 menu_text,
                 reply_markup=markup,
@@ -269,8 +266,8 @@ async def start_command(update: Update, context: CallbackContext) -> int:
             )
             return ConversationHandler.END
         
-        # New user, ask for invitation code
-        await send_or_edit_message(
+        context.dispatcher.run_async(
+            send_or_edit_message,
             update, context,
             get_text(user_id, 'ask_invitation_code', lang=lang),
             parse_mode=ParseMode.HTML
@@ -279,7 +276,9 @@ async def start_command(update: Update, context: CallbackContext) -> int:
         
     except Exception as e:
         log.error(f"Error in start_command: {e}", exc_info=True)
-        await send_or_edit_message(
+        user_id, lang = get_user_id_and_lang(update, context) # Ensure lang is available
+        context.dispatcher.run_async(
+            send_or_edit_message,
             update, context,
             get_text(user_id, 'error_generic', lang=lang),
             parse_mode=ParseMode.HTML
@@ -318,42 +317,46 @@ async def process_invitation_code(update: Update, context: CallbackContext) -> s
     return await client_menu(update, context)
 
 # **MODIFIED HERE for simple_async_test**
-async def admin_command(update: Update, context: CallbackContext) -> int:
+def admin_command(update: Update, context: CallbackContext) -> int:
     """Handle /admin command."""
     try:
         user_id, lang = get_user_id_and_lang(update, context)
         log.info(f"Admin command received from user {user_id}")
         
-        # Clear any previous conversation data
         clear_conversation_data(context)
         
-        # Store user ID and language in context
         context.user_data[CTX_USER_ID] = user_id
         context.user_data[CTX_LANG] = lang
         
-        # Check if user is admin
-        if not is_admin(user_id):
+        if not is_admin(user_id): 
             log.warning(f"Unauthorized admin access attempt from user {user_id}")
-            await send_or_edit_message(
+            context.dispatcher.run_async(
+                send_or_edit_message,
                 update, context,
                 get_text(user_id, 'error_not_admin', lang=lang),
                 parse_mode=ParseMode.HTML
             )
             return ConversationHandler.END
-        
-        # Build and send admin menu
+    
         menu_text, markup, parse_mode = build_admin_menu(user_id, context)
-        await send_or_edit_message(
+        context.dispatcher.run_async(
+            send_or_edit_message,
             update, context,
             menu_text,
             reply_markup=markup,
             parse_mode=parse_mode
         )
         return ConversationHandler.END
-        
+
     except Exception as e:
         log.error(f"Error in admin_command: {e}", exc_info=True)
-        await handle_command_error(update, context, e)
+        user_id, lang = get_user_id_and_lang(update, context) # Ensure lang is available
+        context.dispatcher.run_async(
+            send_or_edit_message,
+            update, context,
+            get_text(user_id, 'error_generic', lang=lang),
+            parse_mode=ParseMode.HTML
+        )
         return ConversationHandler.END
 
 async def cancel_command(update: Update, context: CallbackContext) -> int:
