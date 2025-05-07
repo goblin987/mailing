@@ -115,9 +115,11 @@ async def send_or_edit_message(update: Update, context: CallbackContext, text: s
             # Prefer editing if it's a callback query update
             if update and update.callback_query:
                 can_edit = True
-            # Or if it's the same message triggering the edit (less common)
-            # elif update and update.effective_message and update.effective_message.message_id == message_id:
-            #    can_edit = True
+            # Edit also if it's a message *replying* to the bot's last message (less common use case)
+            # elif update and update.message and update.message.reply_to_message and \
+            #      update.message.reply_to_message.message_id == message_id and \
+            #      update.message.reply_to_message.from_user.id == context.bot.id:
+            #     can_edit = True
 
         if can_edit:
             log.debug(f"[send_or_edit_message] Attempting to EDIT message {message_id} in chat {chat_id}")
@@ -146,11 +148,12 @@ async def send_or_edit_message(update: Update, context: CallbackContext, text: s
                     message = None # Ensure we send new
                 else:
                     log.error(f"[send_or_edit_message] Unhandled BadRequest editing message {message_id}: {e}", exc_info=True)
-                    raise # Re-raise other BadRequests
+                    # Don't raise here, fall through to sending a new message if possible
+                    message = None # Ensure we send new
             except RetryAfter as e:
                  log.warning(f"[send_or_edit_message] RetryAfter editing message {message_id}: {e.retry_after}s. Sleeping.")
                  await asyncio.sleep(e.retry_after + 0.5)
-                 # Retry editing (or fall through to sending) - for simplicity, let's fall through
+                 # Fall through to sending new message after waiting
                  if context and hasattr(context, 'user_data') and isinstance(context.user_data, dict):
                      context.user_data.pop(CTX_MESSAGE_ID, None)
                  message = None
@@ -182,16 +185,15 @@ async def send_or_edit_message(update: Update, context: CallbackContext, text: s
                      log.debug(f"[send_or_edit_message] Stored new message ID {message.message_id} in context.")
              except RetryAfter as e:
                  log.error(f"[send_or_edit_message] RetryAfter sending new message: {e.retry_after}s. NOT RETRYING.")
-                 # Consider implementing retry logic if essential
                  return None
              except Exception as send_e:
                   log.error(f"[send_or_edit_message] Failed to SEND new message: {send_e}", exc_info=True)
                   return None # Indicate failure
 
-        return message # Return the sent or edited message object, or None if sending failed
+        return message
 
     except Exception as e:
-        log.error(f"[send_or_edit_message] Unexpected error: {e}", exc_info=True)
+        log.error(f"[send_or_edit_message] Unexpected outer error: {e}", exc_info=True)
         return None
 
 # --- END OF FILE utils.py ---
