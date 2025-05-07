@@ -37,6 +37,7 @@ from config import (
     STATE_FOLDER_RENAME_PROMPT, STATE_ADMIN_CONFIRM_USERBOT_RESET,
     STATE_WAITING_FOR_START_TIME, STATE_ADMIN_TASK_MESSAGE,
     STATE_ADMIN_TASK_SCHEDULE, STATE_ADMIN_TASK_TARGET,
+    STATE_ADMIN_TASK_CONFIRM,
 
     # Callback Prefixes
     CALLBACK_ADMIN_PREFIX, CALLBACK_CLIENT_PREFIX, CALLBACK_TASK_PREFIX,
@@ -61,6 +62,7 @@ CTX_EXTEND_CODE = "extend_code"; CTX_ADD_BOTS_CODE = "add_bots_code"; CTX_FOLDER
 CTX_FOLDER_NAME = "folder_name"; CTX_FOLDER_ACTION = "folder_action"; CTX_SELECTED_BOTS = "selected_bots"
 CTX_TARGET_GROUP_IDS_TO_REMOVE = "target_group_ids_to_remove"; CTX_TASK_PHONE = "task_phone"
 CTX_TASK_SETTINGS = "task_settings"; CTX_PAGE = "page"; CTX_MESSAGE_ID = "message_id"
+CTX_TASK_BOT = "task_bot"; CTX_TASK_MESSAGE = "task_message"; CTX_TASK_SCHEDULE = "task_schedule"; CTX_TASK_TARGET_TYPE = "task_target_type"; CTX_TASK_TARGET_FOLDER = "task_target_folder"
 
 # --- Helper Functions ---
 
@@ -1280,69 +1282,149 @@ async def handle_client_callback(update: Update, context: CallbackContext) -> st
     return None
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> str | int | None:
+    """Handle admin-related callback queries."""
     query = update.callback_query
-    user_id, lang = get_user_id_and_lang(update, context)
     data = query.data
-    query_id = query.id
-    
-    action = "" 
-    if data.startswith(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirm_"): action = "remove_bot_confirm"
-    elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirmed_"): action = "remove_bot_confirmed"
-    elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}task_options_"): action = "task_options"
-    elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}toggle_task_"): action = "toggle_task"
-    elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}delete_task_"): action = "delete_task"
-    elif data.startswith(f"{CALLBACK_ADMIN_PREFIX}select_task_bot_"): action = "select_task_bot"
-    else: action = data.split(CALLBACK_ADMIN_PREFIX)[1].split('?')[0]
-    
-    log.debug(f"Admin Callback Route: Action='{action}', Data='{data}'")
-    
-    try:
-        if action == "add_bot_prompt":
-            _send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_prompt_phone', lang=lang))
-            return STATE_WAITING_FOR_PHONE
-        elif action == "remove_bot_select":
-            return admin_select_userbot_to_remove(update, context)
-        elif action == "remove_bot_confirm":
-            return admin_confirm_remove_userbot(update, context)
-        elif action == "remove_bot_confirmed":
-            return admin_remove_userbot_confirmed(update, context)
-        elif action == "list_bots":
-            return admin_list_userbots(update, context)
-        elif action == "gen_invite_prompt":
-            _send_or_edit_message(update, context, get_text(user_id, 'admin_invite_prompt_details', lang=lang))
-            return STATE_WAITING_FOR_SUB_DETAILS
-        elif action == "extend_sub_prompt":
-            _send_or_edit_message(update, context, get_text(user_id, 'admin_extend_prompt_code', lang=lang))
-            return STATE_WAITING_FOR_EXTEND_CODE
-        elif action == "assign_bots_prompt":
-            _send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_prompt_code', lang=lang))
-            return STATE_WAITING_FOR_ADD_USERBOTS_CODE
-        elif action == "view_logs":
-            return admin_view_system_logs(update, context)
-        elif action == "back_to_menu":
-            return admin_command(update, context)
-        # New task management actions
-        elif action == "manage_tasks":
-            return admin_task_menu(update, context)
-        elif action == "view_tasks":
-            return admin_view_tasks(update, context)
-        elif action == "create_task":
-            return admin_create_task_start(update, context)
-        elif action == "task_options":
-            return admin_task_options(update, context)
-        elif action == "toggle_task":
-            return admin_toggle_task(update, context)
-        elif action == "delete_task":
-            return admin_delete_task(update, context)
-        elif action == "select_task_bot":
-            return admin_select_task_bot(update, context)
-        else:
-            log.warning(f"Unknown admin callback action: {action}")
-            _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang))
+    user_id = update.effective_user.id
+    lang = context.user_data.get(CTX_LANG, 'en')
+
+    if not is_admin(user_id):
+        await query.answer(get_text(user_id, 'unauthorized', lang=lang), show_alert=True)
+        return ConversationHandler.END
+
+    action = data.replace(CALLBACK_ADMIN_PREFIX, '')
+
+    if action == "back_to_menu":
+        await query.answer()
+        return await admin_command(update, context)
+    elif action == "task_menu":
+        await query.answer()
+        return await admin_task_menu(update, context)
+    elif action == "view_tasks":
+        await query.answer()
+        return await admin_view_tasks(update, context)
+    elif action == "create_task":
+        await query.answer()
+        return await admin_create_task_start(update, context)
+    elif action.startswith("task_bot_"):
+        await query.answer()
+        context.user_data[CTX_TASK_BOT] = action.replace("task_bot_", "")
+        await _send_or_edit_message(
+            update, context,
+            get_text(user_id, 'admin_task_enter_message', lang=lang)
+        )
+        return STATE_WAITING_FOR_TASK_MESSAGE
+    elif action.startswith("task_schedule_"):
+        await query.answer()
+        minutes = int(action.replace("task_schedule_", ""))
+        context.user_data[CTX_TASK_SCHEDULE] = minutes
+        return await admin_process_task_target(update, context)
+    elif action == "task_target_all":
+        await query.answer()
+        context.user_data[CTX_TASK_TARGET_TYPE] = 'all'
+        return await admin_confirm_task(update, context)
+    elif action == "task_target_folder":
+        await query.answer()
+        context.user_data[CTX_TASK_TARGET_TYPE] = 'folder'
+        folders = db.get_user_folders(user_id)
+        if not folders:
+            await _send_or_edit_message(
+                update, context,
+                get_text(user_id, 'admin_task_no_folders', lang=lang),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        get_text(user_id, 'button_back', lang=lang),
+                        callback_data=f"{CALLBACK_ADMIN_PREFIX}task_menu"
+                    )
+                ]])
+            )
             return ConversationHandler.END
-    except Exception as e:
-        log.error(f"Error in admin callback handler: {e}", exc_info=True)
-        _send_or_edit_message(update, context, get_text(user_id, 'error_generic', lang=lang))
+        keyboard = []
+        for folder in folders:
+            keyboard.append([
+                InlineKeyboardButton(
+                    folder['name'],
+                    callback_data=f"{CALLBACK_ADMIN_PREFIX}task_folder_{folder['id']}"
+                )
+            ])
+        keyboard.append([
+            InlineKeyboardButton(
+                get_text(user_id, 'button_back', lang=lang),
+                callback_data=f"{CALLBACK_ADMIN_PREFIX}task_menu"
+            )
+        ])
+        markup = InlineKeyboardMarkup(keyboard)
+        await _send_or_edit_message(
+            update, context,
+            get_text(user_id, 'admin_task_select_folder', lang=lang),
+            reply_markup=markup
+        )
+        return STATE_WAITING_FOR_TASK_TARGET
+    elif action.startswith("task_folder_"):
+        await query.answer()
+        folder_id = int(action.replace("task_folder_", ""))
+        folder = db.get_folder_by_id(folder_id)
+        if not folder:
+            await _send_or_edit_message(
+                update, context,
+                get_text(user_id, 'error_folder_not_found', lang=lang),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        get_text(user_id, 'button_back', lang=lang),
+                        callback_data=f"{CALLBACK_ADMIN_PREFIX}task_menu"
+                    )
+                ]])
+            )
+            return ConversationHandler.END
+        context.user_data[CTX_TASK_TARGET_FOLDER] = folder['name']
+        return await admin_confirm_task(update, context)
+    elif action == "task_confirm":
+        await query.answer()
+        return await admin_save_task(update, context)
+    elif action.startswith("task_options_"):
+        await query.answer()
+        task_id = int(action.replace("task_options_", ""))
+        task = db.get_admin_task_by_id(task_id)
+        if not task:
+            await _send_or_edit_message(
+                update, context,
+                get_text(user_id, 'error_task_not_found', lang=lang),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        get_text(user_id, 'button_back', lang=lang),
+                        callback_data=f"{CALLBACK_ADMIN_PREFIX}task_menu"
+                    )
+                ]])
+            )
+            return ConversationHandler.END
+        return await admin_task_options(update, context, task)
+    elif action.startswith("toggle_task_"):
+        await query.answer()
+        task_id = int(action.replace("toggle_task_", ""))
+        return await admin_toggle_task(update, context, task_id)
+    elif action.startswith("delete_task_"):
+        await query.answer()
+        task_id = int(action.replace("delete_task_", ""))
+        return await admin_delete_task(update, context, task_id)
+    elif action == "list_userbots":
+        await query.answer()
+        return await admin_list_userbots(update, context)
+    elif action == "view_subscriptions":
+        await query.answer()
+        return await admin_view_subscriptions(update, context)
+    elif action == "view_logs":
+        await query.answer()
+        return await admin_view_system_logs(update, context)
+    elif action.startswith("remove_userbot_"):
+        await query.answer()
+        phone = action.replace("remove_userbot_", "")
+        return await admin_confirm_remove_userbot(update, context, phone)
+    elif action.startswith("confirm_remove_userbot_"):
+        await query.answer()
+        phone = action.replace("confirm_remove_userbot_", "")
+        return await admin_remove_userbot_confirmed(update, context, phone)
+    else:
+        await query.answer(get_text(user_id, 'error_invalid_action', lang=lang), show_alert=True)
         return ConversationHandler.END
 
 async def handle_folder_callback(update: Update, context: CallbackContext) -> str | int | None:
@@ -1509,7 +1591,8 @@ main_conversation = ConversationHandler(
         STATE_WAITING_FOR_TASK_BOT: [CallbackQueryHandler(main_callback_handler, run_async=True)],
         STATE_WAITING_FOR_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_message, run_async=True)],
         STATE_WAITING_FOR_TASK_SCHEDULE: [CallbackQueryHandler(main_callback_handler, run_async=True)],
-        STATE_WAITING_FOR_TASK_TARGET: [CallbackQueryHandler(main_callback_handler, run_async=True)]
+        STATE_WAITING_FOR_TASK_TARGET: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(main_callback_handler, run_async=True)]
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private, run_async=True),
@@ -1745,4 +1828,94 @@ async def handle_command_error(update: Update, context: CallbackContext, error: 
     log.error(f"Error in command handler: {error}", exc_info=True)
     await error_handler(update, context)
     return ConversationHandler.END
+
+async def admin_confirm_task(update: Update, context: CallbackContext) -> int:
+    """Handle the confirmation of task creation."""
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        await _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    # Get task details from context
+    bot_phone = context.user_data.get(CTX_TASK_BOT)
+    message_link = context.user_data.get(CTX_TASK_MESSAGE)
+    schedule = context.user_data.get(CTX_TASK_SCHEDULE)
+    target_type = context.user_data.get(CTX_TASK_TARGET_TYPE)
+    target_folder = context.user_data.get(CTX_TASK_TARGET_FOLDER)
+    
+    # Create confirmation message
+    confirmation_text = get_text(user_id, 'admin_task_confirm', lang=lang).format(
+        bot=bot_phone,
+        message=message_link,
+        schedule=schedule,
+        target=target_type if target_type == 'all' else f"folder: {target_folder}"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton(get_text(user_id, 'button_confirm', lang=lang), 
+                               callback_data=f"{CALLBACK_ADMIN_PREFIX}task_confirm"),
+            InlineKeyboardButton(get_text(user_id, 'button_cancel', lang=lang), 
+                               callback_data=f"{CALLBACK_ADMIN_PREFIX}task_menu")
+        ]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    
+    await _send_or_edit_message(update, context, confirmation_text, reply_markup=markup)
+    return STATE_ADMIN_TASK_CONFIRM
+
+async def admin_save_task(update: Update, context: CallbackContext) -> int:
+    """Save the task after confirmation."""
+    user_id, lang = get_user_id_and_lang(update, context)
+    if not is_admin(user_id):
+        await _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+        return ConversationHandler.END
+    
+    try:
+        # Get task details from context
+        bot_phone = context.user_data.get(CTX_TASK_BOT)
+        message_link = context.user_data.get(CTX_TASK_MESSAGE)
+        schedule = context.user_data.get(CTX_TASK_SCHEDULE)
+        target_type = context.user_data.get(CTX_TASK_TARGET_TYPE)
+        target_folder = context.user_data.get(CTX_TASK_TARGET_FOLDER)
+        
+        # Save task to database
+        task_id = db.create_admin_task(
+            phone_number=bot_phone,
+            message_link=message_link,
+            schedule_minutes=schedule,
+            target_type=target_type,
+            target_folder=target_folder if target_type == 'folder' else None,
+            active=True
+        )
+        
+        # Clear task data from context
+        clear_conversation_data(context)
+        
+        # Send success message
+        await _send_or_edit_message(
+            update, context,
+            get_text(user_id, 'admin_task_created', lang=lang),
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    get_text(user_id, 'button_back', lang=lang),
+                    callback_data=f"{CALLBACK_ADMIN_PREFIX}task_menu"
+                )
+            ]])
+        )
+        return ConversationHandler.END
+        
+    except Exception as e:
+        log.error(f"Error saving admin task: {e}", exc_info=True)
+        await _send_or_edit_message(
+            update, context,
+            get_text(user_id, 'error_generic', lang=lang),
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    get_text(user_id, 'button_back', lang=lang),
+                    callback_data=f"{CALLBACK_ADMIN_PREFIX}task_menu"
+                )
+            ]])
+        )
+        return ConversationHandler.END
 
