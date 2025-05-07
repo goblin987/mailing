@@ -116,7 +116,7 @@ async def error_handler(update: object, context: CallbackContext) -> None:
         if chat_id:
             log.info(f"error_handler: Attempting to send generic error to user {user_id}, chat {chat_id}")
             error_message = get_text(user_id, 'error_generic', lang=context.user_data.get('_lang', 'en'))
-            await _send_or_edit_message(update, context, error_message)
+            await context.bot.send_message(chat_id=chat_id, text=error_message)
     except Exception as e:
         log.error(f"error_handler: Failed to send error message: {e}", exc_info=True)
 
@@ -228,30 +228,49 @@ def build_pagination_buttons(base_callback_data: str, current_page: int, total_i
 
 # **MODIFIED HERE for simple_async_test**
 async def start_command(update: Update, context: CallbackContext) -> str | int:
-    user_id, lang = get_user_id_and_lang(update, context)
-    clear_conversation_data(context)
-    log.info(f"Start cmd: UserID={user_id}, User={update.effective_user.username if update.effective_user else 'N/A'}, Lang={lang}")
-    
-    if is_admin(user_id):
-        log.info(f"Admin user {user_id} used /start, showing admin menu.")
-        await _show_menu_async(update, context, build_admin_menu)
-        return ConversationHandler.END
-    else:
+    """Start command handler."""
+    try:
+        user_id = update.effective_user.id
+        lang = context.user_data.get(CTX_LANG, 'en')
+        
+        # Store user ID and language in context
+        context.user_data[CTX_USER_ID] = user_id
+        if not context.user_data.get(CTX_LANG):
+            context.user_data[CTX_LANG] = lang
+            
+        # Check if user is admin
+        if is_admin(user_id):
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=get_text(user_id, 'admin_welcome', lang=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return STATE_WAITING_FOR_PHONE
+            
+        # Check if user is already registered
         client_info = db.find_client_by_user_id(user_id)
         if client_info:
-            now_ts = int(datetime.now(UTC_TZ).timestamp())
-            if client_info['subscription_end'] < now_ts:
-                log.info(f"Client {user_id} subscription expired. Sending expiry message.")
-                await _send_or_edit_message(update, context, get_text(user_id, 'subscription_expired', lang=lang))
-                return ConversationHandler.END
-            else:
-                log.info(f"Client {user_id} identified. Showing client menu.")
-                await _show_menu_async(update, context, build_client_menu)
-                return ConversationHandler.END
-        else:
-            log.info(f"Unknown user {user_id}. Sending welcome/code prompt.")
-            await _send_or_edit_message(update, context, get_text(user_id, 'welcome', lang=lang))
-            return STATE_WAITING_FOR_CODE
+            menu_text, markup, parse_mode = build_client_menu(user_id, context)
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=menu_text,
+                reply_markup=markup,
+                parse_mode=parse_mode
+            )
+            return ConversationHandler.END
+            
+        # New user - ask for invitation code
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=get_text(user_id, 'welcome_new_user', lang=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return STATE_WAITING_FOR_CODE
+        
+    except Exception as e:
+        log.error(f"Error in start_command: {e}", exc_info=True)
+        await error_handler(update, context)
+        return ConversationHandler.END
 
 async def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
     user_id, lang = get_user_id_and_lang(update, context)
@@ -286,58 +305,80 @@ async def process_invitation_code(update: Update, context: CallbackContext) -> s
 
 # **MODIFIED HERE for simple_async_test**
 async def admin_command(update: Update, context: CallbackContext) -> str | int:
-    user_id, lang = get_user_id_and_lang(update, context)
-    clear_conversation_data(context)
-    log.info(f"Admin cmd: UserID={user_id}, User={update.effective_user.username if update.effective_user else 'N/A'}, Lang={lang}")
-    
-    if not is_admin(user_id): 
-        log.warning(f"Unauthorized attempt to use /admin by UserID={user_id}")
-        await _send_or_edit_message(update, context, get_text(user_id, 'unauthorized', lang=lang))
+    """Admin command handler."""
+    try:
+        user_id = update.effective_user.id
+        lang = context.user_data.get(CTX_LANG, 'en')
+        
+        # Store user ID and language in context
+        context.user_data[CTX_USER_ID] = user_id
+        if not context.user_data.get(CTX_LANG):
+            context.user_data[CTX_LANG] = lang
+            
+        # Check if user is admin
+        if not is_admin(user_id):
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=get_text(user_id, 'unauthorized', lang=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return ConversationHandler.END
+            
+        # Show admin menu
+        menu_text, markup, parse_mode = build_admin_menu(user_id, context)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=menu_text,
+            reply_markup=markup,
+            parse_mode=parse_mode
+        )
         return ConversationHandler.END
-    
-    log.info(f"Admin user {user_id} showing admin menu.")
-    await _show_menu_async(update, context, build_admin_menu)
-    return ConversationHandler.END
+        
+    except Exception as e:
+        log.error(f"Error in admin_command: {e}", exc_info=True)
+        await error_handler(update, context)
+        return ConversationHandler.END
 
 async def cancel_command(update: Update, context: CallbackContext) -> int:
-    user_id, lang = get_user_id_and_lang(update, context)
-    log.info(f"Cancel cmd: UserID={user_id}, Lang={lang}")
-    current_state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data') 
-    log.debug(f"Cancel called from state: {current_state}")
-    
-    clear_conversation_data(context)
-    await _send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang=lang))
-    
-    if is_admin(user_id):
-        log.debug(f"Cancel cmd: User {user_id} is admin, showing admin menu.")
-        await _show_menu_async(update, context, build_admin_menu)
-    elif db.find_client_by_user_id(user_id):
-        log.debug(f"Cancel cmd: User {user_id} is client, showing client menu.")
-        await _show_menu_async(update, context, build_client_menu)
-    else:
-        log.debug(f"Cancel cmd: User {user_id} is neither admin nor known client.")
-    return ConversationHandler.END
+    """Cancel command handler."""
+    try:
+        user_id = update.effective_user.id
+        lang = context.user_data.get(CTX_LANG, 'en')
+        
+        # Clear conversation data
+        clear_conversation_data(context)
+        
+        # Send cancellation message
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=get_text(user_id, 'cancelled', lang=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+        
+    except Exception as e:
+        log.error(f"Error in cancel_command: {e}", exc_info=True)
+        await error_handler(update, context)
+        return ConversationHandler.END
 
 async def conversation_fallback(update: Update, context: CallbackContext) -> int:
-    user_id, lang = get_user_id_and_lang(update, context)
-    state = context.user_data.get(ConversationHandler.CURRENT_STATE if hasattr(ConversationHandler, 'CURRENT_STATE') else '_user_data')
-    msg_text = update.effective_message.text if update.effective_message and update.effective_message.text else 'Non-text update'
-    log.warning(f"Conv fallback: UserID={user_id}. State={state}. Msg='{html.escape(msg_text[:50])}...', Lang={lang}")
-    
-    if update.message and update.message.text and update.message.text.startswith('/'):
-        command = update.message.text
-        if command == '/cancel':
-            return await cancel_command(update, context)
-        if command == '/start':
-            await _send_or_edit_message(update, context, get_text(user_id, 'state_cleared', lang=lang))
-            return await start_command(update, context)
-        if command == '/admin' and is_admin(user_id):
-            await _send_or_edit_message(update, context, get_text(user_id, 'state_cleared', lang=lang))
-            return await admin_command(update, context)
-    
-    await _send_or_edit_message(update, context, get_text(user_id, 'conversation_fallback', lang=lang))
-    clear_conversation_data(context)
-    return ConversationHandler.END
+    """Fallback handler for unexpected messages."""
+    try:
+        user_id = update.effective_user.id
+        lang = context.user_data.get(CTX_LANG, 'en')
+        
+        # Send fallback message
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=get_text(user_id, 'session_expired', lang=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+        
+    except Exception as e:
+        log.error(f"Error in conversation_fallback: {e}", exc_info=True)
+        await error_handler(update, context)
+        return ConversationHandler.END
 
 async def client_menu(update: Update, context: CallbackContext) -> int:
     user_id, lang = get_user_id_and_lang(update, context)
@@ -1434,49 +1475,51 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
 
 main_conversation = ConversationHandler(
     entry_points=[
-        CommandHandler('start', start_command, filters=Filters.chat_type.private),
-        CommandHandler('admin', admin_command, filters=Filters.chat_type.private),
-        CallbackQueryHandler(main_callback_handler)
+        CommandHandler('start', start_command, filters=Filters.chat_type.private, run_async=True),
+        CommandHandler('admin', admin_command, filters=Filters.chat_type.private, run_async=True),
+        CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private, run_async=True),
+        CallbackQueryHandler(main_callback_handler, run_async=True)
     ],
     states={
-        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_invitation_code)],
-        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_phone)],
-        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_id)],
-        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash)],
-        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_code)],
-        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_password)],
-        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_invite_details)],
-        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_code)],
-        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_days)],
-        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_code)],
-        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_count)],
-        STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_name)],
-        STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename)],
-        STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_links)], 
-        STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'primary'))],
-        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'fallback'))],
-        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_start_time)],
-        STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_message)],
-        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_schedule)],
-        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_target)],
+        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_invitation_code, run_async=True)],
+        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_phone, run_async=True)],
+        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_id, run_async=True)],
+        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_api_hash, run_async=True)],
+        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_code, run_async=True)],
+        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_userbot_password, run_async=True)],
+        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_invite_details, run_async=True)],
+        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_name, run_async=True)],
+        STATE_WAITING_FOR_FOLDER_SELECTION: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, client_select_folder_to_edit_or_delete, run_async=True)],
+        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_join_group_links, run_async=True)],
+        STATE_WAITING_FOR_LANGUAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, set_language_handler, run_async=True)],
+        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_code, run_async=True)],
+        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_extend_days, run_async=True)],
+        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_code, run_async=True)],
+        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_admin_add_bots_count, run_async=True)],
+        STATE_WAITING_FOR_FOLDER_ACTION: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, client_show_folder_edit_options, run_async=True)],
+        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'primary'), run_async=True)],
+        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, lambda u, c: process_task_link(u, c, 'fallback'), run_async=True)],
+        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_task_start_time, run_async=True)],
+        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_message, run_async=True)],
+        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_schedule, run_async=True)],
+        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, admin_process_task_target, run_async=True)],
+        STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, process_folder_rename, run_async=True)],
+        STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_SELECT_TARGET_GROUPS: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler, run_async=True)],
     },
     fallbacks=[
-        CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private),
-        CommandHandler('start', start_command, filters=Filters.chat_type.private), 
-        CommandHandler('admin', admin_command, filters=Filters.chat_type.private & Filters.user(ADMIN_IDS)), 
-        CallbackQueryHandler(main_callback_handler), 
-        MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, conversation_fallback), 
+        CommandHandler('cancel', cancel_command, filters=Filters.chat_type.private, run_async=True),
+        CommandHandler('start', start_command, filters=Filters.chat_type.private, run_async=True),
+        CommandHandler('admin', admin_command, filters=Filters.chat_type.private & Filters.user(ADMIN_IDS), run_async=True),
+        CallbackQueryHandler(main_callback_handler, run_async=True),
+        MessageHandler(Filters.text & ~Filters.command & Filters.chat_type.private, conversation_fallback, run_async=True)
     ],
-    allow_reentry=True,
     name="main_conversation",
     persistent=True,
+    allow_reentry=True
 )
 
 log.info("Handlers module loaded with corrected sync/async definitions.")
