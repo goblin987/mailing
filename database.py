@@ -408,24 +408,36 @@ def find_userbot(phone):
         log.error(f"DB Error finding userbot {phone}: {e}")
         return None
 
-def get_all_userbots(assigned_status=None):
-    """Fetches all userbots, optionally filtering by assigned status."""
-    # assigned_status: True (assigned), False (unassigned), None (all)
-    sql = "SELECT u.*, c.user_id as client_user_id FROM userbots u LEFT JOIN clients c ON u.assigned_client = c.invitation_code"
-    params = []
-    if assigned_status is True:
-        sql += " WHERE u.assigned_client IS NOT NULL"
-    elif assigned_status is False:
-        sql += " WHERE u.assigned_client IS NULL"
-    sql += " ORDER BY u.assigned_client NULLS FIRST, u.phone_number" # Show unassigned first
+def get_all_userbots(assigned_status=None, exclude_status=None):
+    """Retrieves all userbots, optionally filtered by status.
+    
+    Args:
+        assigned_status (str, optional): Filter by assigned status
+        exclude_status (list, optional): List of statuses to exclude
+    """
     try:
         conn = _get_db_connection()
         with db_lock:
             cursor = conn.cursor()
+            sql = "SELECT * FROM userbots"
+            params = []
+            conditions = []
+            
+            if assigned_status is not None:
+                conditions.append("assigned_client IS NOT NULL" if assigned_status else "assigned_client IS NULL")
+            
+            if exclude_status:
+                placeholders = ','.join('?' * len(exclude_status))
+                conditions.append(f"status NOT IN ({placeholders})")
+                params.extend(exclude_status)
+            
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+            
             cursor.execute(sql, params)
             return cursor.fetchall()
     except sqlite3.Error as e:
-        log.error(f"DB Error fetching userbots (assigned={assigned_status}): {e}")
+        log.error(f"DB Error getting all userbots: {e}")
         return []
 
 def get_client_bots(user_id):
@@ -1237,5 +1249,7 @@ except Exception as e:
      log.critical(f"FATAL: Failed to initialize database on module load: {e}", exc_info=True)
      # Depending on requirements, might want to sys.exit(1) here if DB is absolutely essential
      # For now, just log the critical failure. The bot might crash later if DB is needed.
+
+# --- END OF FILE database.py ---
 
 # --- END OF FILE database.py ---
