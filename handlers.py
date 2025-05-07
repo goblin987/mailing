@@ -268,9 +268,7 @@ async def start_command(update: Update, context: CallbackContext) -> str | int:
         return STATE_WAITING_FOR_CODE
         
     except Exception as e:
-        log.error(f"Error in start_command: {e}", exc_info=True)
-        await error_handler(update, context)
-        return ConversationHandler.END
+        return await handle_command_error(update, context, e)
 
 async def process_invitation_code(update: Update, context: CallbackContext) -> str | int:
     user_id, lang = get_user_id_and_lang(update, context)
@@ -335,9 +333,7 @@ async def admin_command(update: Update, context: CallbackContext) -> str | int:
         return ConversationHandler.END
         
     except Exception as e:
-        log.error(f"Error in admin_command: {e}", exc_info=True)
-        await error_handler(update, context)
-        return ConversationHandler.END
+        return await handle_command_error(update, context, e)
 
 async def cancel_command(update: Update, context: CallbackContext) -> int:
     """Cancel command handler."""
@@ -1738,4 +1734,12 @@ async def admin_delete_task(update: Update, context: CallbackContext) -> int:
     
     # Return to task list
     return await admin_view_tasks(update, context)
+
+# Helper function to handle errors in command handlers
+async def handle_command_error(update: Update, context: CallbackContext, error: Exception) -> int:
+    """Helper function to handle errors in command handlers."""
+    log.error(f"Error in command handler: {error}", exc_info=True)
+    await error_handler(update, context)
+    return ConversationHandler.END
+
 
