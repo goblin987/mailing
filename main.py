@@ -122,6 +122,12 @@ async def main():
 
     # --- Register Handlers ---
     log.info("Registering handlers...")
+
+    # Register /start and /admin commands directly
+    dp.add_handler(CommandHandler('start', handlers.start_command))
+    dp.add_handler(CommandHandler('admin', handlers.admin_command))
+    log.info("/start and /admin commands registered directly.")
+
     if handlers.main_conversation:
         dp.add_handler(handlers.main_conversation)
         log.info("Main conversation handler registered.")
