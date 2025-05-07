@@ -1573,9 +1573,7 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
 # --- Main Conversation Handler Setup ---
 main_conversation = ConversationHandler(
     entry_points=[
-        CommandHandler('start', start_command),
-        CommandHandler('admin', admin_command),
-        CommandHandler('cancel', cancel_command)
+        CommandHandler('cancel', cancel_command)  # start_command and admin_command removed
     ],
     states={
         STATE_WAITING_FOR_CODE: [
@@ -1645,7 +1643,7 @@ main_conversation = ConversationHandler(
         MessageHandler(Filters.all, conversation_fallback)
     ],
     name="main_conversation",
-    persistent=False,  # Changed from True to False
+    persistent=False,
     allow_reentry=True
 )
 
