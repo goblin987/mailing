@@ -101,14 +101,14 @@ async def main():
     # --- Register Handlers ---
     log.info("Registering handlers...")
 
-    # Register /start and /admin commands directly
-    dp.add_handler(CommandHandler('start', handlers.start_command))
-    dp.add_handler(CommandHandler('admin', handlers.admin_command))
-    log.info("/start and /admin commands registered directly.")
+    # /start and /admin commands are now entry points to main_conversation
+    # dp.add_handler(CommandHandler('start', handlers.start_command)) # REMOVED
+    # dp.add_handler(CommandHandler('admin', handlers.admin_command)) # REMOVED
+    # log.info("/start and /admin commands registered directly.") # REMOVED/MODIFIED LOG
 
     if handlers.main_conversation:
         dp.add_handler(handlers.main_conversation)
-        log.info("Main conversation handler registered.")
+        log.info("Main conversation handler (including /start and /admin entry points) registered.") # MODIFIED LOG
     else:
         log.critical("CRITICAL: Main conversation handler not found in handlers module!")
         sys.exit(1)
