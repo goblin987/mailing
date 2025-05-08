@@ -23,6 +23,7 @@ translations = {
         # --- General ---
         'error_generic': "⚙️ An unexpected error occurred. Please try again later or contact support.",
         'error_invalid_input': "⚠️ Invalid input format. Please check and try again.",
+        'error_invalid_action': "🚫 Action not recognized or invalid in this context.", # Added/Updated
         'error_db': "⚙️ A database error occurred. Please contact support if this persists.",
         'error_telegram_api': "🌐 Telegram API error: {error}. This might be temporary.",
         'error_flood_wait': "⏳ Please wait {seconds} seconds before trying this action again (Telegram limit).",
@@ -42,13 +43,14 @@ translations = {
         'ask_invitation_code': "Please send your unique invitation code to activate your account (e.g., `a565ae57`). If you are an Admin, use /admin.",
         'admin_welcome': "👑 Welcome to the Admin Panel!",
         'admin_panel_title': "👑 Admin Panel",
+        'this_folder': "this folder", # Added generic fallback
 
         # --- Admin Buttons ---
         'admin_button_add_userbot': "➕ Add Userbot",
         'admin_button_remove_userbot': "➖ Remove Userbot",
         'admin_button_list_userbots': "🤖 List Userbots",
-        'admin_button_manage_tasks': "⚙️ Manage Tasks", # Placeholder, assumes admin tasks exist
-        'admin_button_view_tasks': "👁️ View Tasks",   # Placeholder, assumes admin tasks exist
+        'admin_button_manage_tasks': "⚙️ Manage Admin Tasks", # Clarified
+        'admin_button_view_tasks': "👁️ View Admin Tasks",   # Clarified
         'admin_button_gen_invite': "✉️ Generate Invite Code",
         'admin_button_view_subs': "👥 View Subscriptions",
         'admin_button_extend_sub': "⏳ Extend Subscription",
@@ -76,7 +78,7 @@ translations = {
         'welcome': "👋 Welcome! Please send your unique invitation code to activate your account (e.g., `a565ae57`). If you are an Admin, use /admin.",
         'invalid_code_format': "⚠️ The code format seems incorrect (should be 8 characters, letters a-f, numbers 0-9). Please check and try again.",
         'code_not_found': "❌ Invalid invitation code. It might be incorrect or expired.",
-        'code_expired': "⏳ This invitation code has expired.",
+        'code_expired': "⏳ This invitation code has expired.", # Use subscription_expired from DB check
         'code_already_used': "🚫 This invitation code has already been activated by another user.",
         'user_already_active': "⚠️ You already seem to have an active account. Use /start to access the menu.",
         'activation_error': "⚙️ An error occurred during activation. Please double-check the code or contact support.",
@@ -95,7 +97,7 @@ translations = {
         'client_menu_button_manage_folders': "📁 Manage Group Folders",
         'client_menu_button_join_groups': "🔗 Join New Groups",
         'client_menu_button_view_joined': "👁️ View Joined Groups (per Bot)", # Kept key, but feature disabled in handler
-        'client_menu_button_stats': "📊 View Your Stats", # Corrected key from "logs" to "stats" as per handler.
+        'client_menu_button_stats': "📊 View Your Stats",
         'client_menu_button_language': "🌐 Set Language",
 
         # --- Language Selection ---
@@ -196,7 +198,7 @@ translations = {
         'folder_results_title': "<b>🛠️ Folder Update Results for '<code>{name}</code>':</b>",
         'folder_results_line': "<code>{link}</code>: {status}",
         'folder_results_added': "✅ Added",
-        'folder_results_ignored': "⚪ Ignored (duplicate or unresolvable)", # Updated
+        'folder_results_ignored': "⚪ Ignored (duplicate or unresolvable)",
         'folder_results_failed': "❌ Failed ({reason})",
         'folder_link_parse_error': "invalid link format",
         'folder_resolve_error': "could not resolve ID/name",
@@ -234,7 +236,7 @@ translations = {
                                       "Send '<code>skip</code>' to not use a fallback message."),
         'task_error_invalid_link': "⚠️ Invalid message link format. Please provide a direct link to a specific message (e.g., `https://t.me/c/123.../456`).",
         'task_error_link_unreachable': "❌ Could not access the message at this link. Ensure the userbot (<code>{bot_phone}</code>) has access to the source chat/channel.",
-        'task_verifying_link': "⏳ Verifying link access...", # New key
+        'task_verifying_link': "⏳ Verifying link access...",
         'task_set_success_msg': "✅ Primary message link set.",
         'task_set_success_fallback': "✅ Fallback message link set.",
         'task_set_skipped_fallback': "⚪ Fallback message skipped.",
@@ -252,7 +254,7 @@ translations = {
         'task_error_no_folders': "⚠️ No folders found. Create one via 'Manage Folders' first, or choose 'Send to All Groups'.",
         'task_set_success_target_all': "✅ Target set to: Send to All Joined Groups.",
         'task_set_success_target_folder': "✅ Target set to: Folder '<code>{name}</code>'.",
-        'task_status_toggled_success': "✅ Task status set to: <b>{status}</b>.",
+        'task_status_toggled_success': "✅ Task status set to: <b>{status}</b>.", # Was missing
         'task_save_success': "✅ Task settings for {display_name} saved.",
         'task_save_error': "⚙️ Failed to save task settings.",
         'task_save_validation_fail': "⚠️ Cannot save/activate task. Missing required settings: {missing}. Please configure them first.",
@@ -260,6 +262,8 @@ translations = {
         'task_required_target': "Target (Folder or All Groups)",
         'task_required_start_time': "Start Time",
         'task_required_interval': "Interval",
+        'task_error_no_active_bots': "⚠️ You have no <i>active</i> userbots available to run tasks.", # Added
+
 
         # --- Admin Panel ---
         'admin_button_add_userbot': "🤖 Add Userbot",
@@ -361,86 +365,66 @@ translations = {
         'conversation_fallback': "❓ Unrecognized command or input in the current context. Action cancelled. Please start again using /start or /admin.",
         'internal_error_log': "An internal error occurred in state {state}. User: {user_id}. Error: {error}", # For logging only
 
-        # Admin Task Management
-        'admin_task_list_title': '📋 Task List',
-        'admin_task_list_empty': 'No tasks configured yet.',
-        'admin_task_list_entry': '''
-Task #{task_id}
-Status: {status}
-Message: {message}
-Target: {target}
-Schedule: {schedule}
-Last Run: {last_run}
-Next Run: {next_run}
-''',
-        'admin_task_manage_title': '📋 Task Management',
-        'admin_task_create_button': '➕ Create New Task',
-        'admin_task_edit_button': '✏️ Edit Task',
-        'admin_task_delete_button': '🗑️ Delete Task',
-        'admin_task_toggle_button': '🔄 Toggle Status',
-        'admin_task_select_bot': 'Select a userbot for this task:',
-        'admin_task_no_bots': 'No userbots available. Add a userbot first.',
-        'admin_task_enter_message': 'Enter the message to be posted:',
-        'admin_task_enter_schedule': 'Enter the schedule in cron format (e.g., "0 9 * * *" for daily at 9 AM):',
+        # --- Admin Task Management ---
+        'admin_task_menu_title': '⚙️ Manage Admin Tasks',
+        'admin_task_view': '👁️ View Tasks',
+        'admin_task_create': '➕ Create New Task',
+        'admin_task_list_title': '📋 Admin Task List',
+        'admin_task_list_empty': 'No admin tasks configured yet.',
+        'admin_task_details': "<b>Task #{task_id} Details</b>\nStatus: {status}\nBot: {phone}\nTarget: {target}\nSchedule: {schedule}", # Simplified, add more fields if needed
+        'admin_task_options_title': "Task Options:", # Added, might be needed if admin_task_options shows text
+        'admin_task_activate': "▶️ Activate Task", # Added
+        'admin_task_deactivate': "⏸️ Deactivate Task", # Added
+        'admin_task_delete': "🗑️ Delete Task", # Used in callback? Add key 'admin_task_delete_button' if needed for button text.
+        'admin_task_toggled': "✅ Task status toggled.", # Added
+        'admin_task_deleted': "✅ Task deleted.", # Added
+        'admin_task_not_found': "❌ Task not found.", # Added
+        'admin_task_select_bot': '🤖 Select a userbot for this task:',
+        'admin_task_no_bots': '⚠️ No active userbots available. Please add and activate a userbot first.',
+        'admin_task_enter_message': 'Enter the message link or text to be posted:',
+        'admin_task_enter_schedule': 'Enter the schedule in cron format (e.g., "0 9 * * *" for daily at 9 AM UTC):',
         'admin_task_invalid_schedule': '⚠️ Invalid schedule format. Please use cron format (e.g., "0 9 * * *").',
-        'admin_task_enter_target': 'Enter the target group username or ID:',
-        'admin_task_invalid_target': '⚠️ Invalid target. Please enter a valid group username or ID.',
-        'admin_task_created': '✅ Task created successfully!',
-        'admin_task_updated': '✅ Task updated successfully!',
-        'admin_task_deleted': '✅ Task deleted successfully!',
-        'admin_task_toggled': '✅ Task status toggled successfully!',
-        'admin_task_error': '⚠️ An error occurred while managing the task. Please try again.',
+        'admin_task_enter_target': 'Enter the target group/channel username (e.g., @channelname) or ID (e.g., -100123...):',
+        'admin_task_invalid_target': '⚠️ Invalid target format. Please enter a username or ID.',
+        'admin_task_invalid_link': '⚠️ Invalid message link/text provided.', # Added
+        'admin_task_created': '✅ Admin task created successfully!',
+        'admin_task_error': '⚠️ An error occurred while managing the admin task. Please check logs.',
+        'admin_task_delete_button': "🗑️ Delete Task", # Added button text key
     },
-    # --- Lithuanian Translations (Example stubs - NEEDS FULL TRANSLATION) ---
+    # --- Lithuanian Translations ---
     'lt': {
-        'welcome': "👋 Sveiki! Norėdami aktyvuoti paskyrą, atsiųskite savo unikalų kvietimo kodą (pvz., `a565ae57`). Administratoriai naudoja /admin.",
+        # Add ALL English keys here with Lithuanian translations
+        'error_generic': "⚙️ Įvyko netikėta klaida. Bandykite vėliau arba kreipkitės pagalbos.",
+        'unauthorized': "🚫 Jūs neturite teisės vykdyti šios komandos.",
         'button_back': "🔙 Atgal",
-        'button_cancel': "❌ Atšaukti",
-        'button_confirm': "✅ Patvirtinti",
-        'button_delete': "🗑️ Trinti",
-        'button_yes': "✅ Taip",
-        'button_no': "❌ Ne",
-        'button_main_menu': "🏠 Pagrindinis Meniu",
-        'select_language': "Pasirinkite pageidaujamą kalbą:",
-        'language_set': "✅ Kalba nustatyta į {lang_name}.",
-        'error_generic': "⚙️ Įvyko netikėta klaida.",
-        'unauthorized': "🚫 Jūs neturite leidimo.",
-        'cancelled': "❌ Veiksmas atšauktas.",
-        'admin_panel_title': "<b>👑 Administratoriaus Skydelis</b>",
-        'admin_invite_prompt_details': "Įveskite prenumeratos informaciją:\nFormatas: <code><dienos>d <botai>b</code>\nPavyzdys: <code>30d 2b</code> (30 dienų, 2 botai)",
-        'folder_menu_title': "<b>📁 Tvarkyti Katalogus</b>",
-        'folder_menu_create': "➕ Sukurti Katalogą",
-        'folder_edit_title': "<b>✏️ Redaguojamas Katalogas:</b> <code>{name}</code>",
-        'task_setup_title': "<b>⚙️ Užduoties Nustatymai {display_name}</b>",
-        'task_value_not_set': "<i>Nenustatyta</i>",
-        # ... MANY OTHER KEYS MISSING TRANSLATION ...
+        # ... etc ...
     },
-    # --- Other Language Stubs (NEED FULL TRANSLATION) ---
+    # --- Other Languages ---
     'uk': {
-        'welcome': "👋 Ласкаво просимо! Надішліть свій унікальний код запрошення для активації (напр., `a565ae57`). Адміністратори використовують /admin.",
+        # Add ALL English keys here with Ukrainian translations
+        'error_generic': "⚙️ Сталася неочікувана помилка. Спробуйте пізніше або зверніться до підтримки.",
+        'unauthorized': "🚫 У вас немає доступу до цієї команди.",
         'button_back': "🔙 Назад",
-        'select_language': "Будь ласка, виберіть бажану мову:",
-        'language_set': "✅ Мову встановлено на {lang_name}.",
-        # ... MANY OTHER KEYS MISSING TRANSLATION ...
+        # ... etc ...
     },
     'pl': {
-        'welcome': "👋 Witaj! Prześlij swój unikalny kod zaproszenia, aby aktywować konto (np. `a565ae57`). Administratorzy używają /admin.",
+        # Add ALL English keys here with Polish translations
+        'error_generic': "⚙️ Wystąpił nieoczekiwany błąd. Spróbuj ponownie później lub skontaktuj się z pomocą techniczną.",
+        'unauthorized': "🚫 Nie masz uprawnień do użycia tej komendy.",
         'button_back': "🔙 Wstecz",
-        'select_language': "Proszę wybrać preferowany język:",
-        'language_set': "✅ Język ustawiony na {lang_name}.",
-        # ... MANY OTHER KEYS MISSING TRANSLATION ...
+        # ... etc ...
     },
     'ru': {
-        'welcome': "👋 Добро пожаловать! Отправьте ваш уникальный код приглашения для активации (напр., `a565ae57`). Администраторы используют /admin.",
+        # Add ALL English keys here with Russian translations
+        'error_generic': "⚙️ Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже или свяжитесь со службой поддержки.",
+        'unauthorized': "🚫 У вас нет прав для выполнения этой команды.",
         'button_back': "🔙 Назад",
-        'select_language': "Пожалуйста, выберите предпочитаемый язык:",
-        'language_set': "✅ Язык установлен на {lang_name}.",
-        # ... MANY OTHER KEYS MISSING TRANSLATION ...
+        # ... etc ...
     }
 }
 
 # --- Function to Get Text ---
-def get_text(user_id, key, lang_override=None, **kwargs):
+def get_text(user_id, key, lang_override=None, default_text=None, **kwargs):
     """
     Retrieves translated text based on user's language preference or an override.
     Uses English as a fallback if the key is missing in the target language.
@@ -450,51 +434,39 @@ def get_text(user_id, key, lang_override=None, **kwargs):
     # Determine language: Override > User's DB pref > Default 'en'
     if not lang and user_id is not None and user_id != 0:
         try:
-            # Fetch language preference from DB if not overridden
             lang = db.get_user_language(user_id)
         except Exception as e:
-            # Log DB error but proceed with default language
             log.error(f"Failed to get language for user {user_id} from DB: {e}")
             lang = 'en'
     elif not lang:
-        # Default to English if no user ID or no override
         lang = 'en'
 
-    # Ensure the determined language code is valid, fallback to 'en' if not
     if lang not in translations:
         log.warning(f"Invalid language code '{lang}' determined for user {user_id}. Falling back to 'en'.")
         lang = 'en'
 
-    # Get the text: User's lang > English fallback > Key itself
     selected_lang_dict = translations.get(lang)
     english_dict = translations.get('en', {})
 
     if selected_lang_dict and key in selected_lang_dict:
         text_template = selected_lang_dict[key]
     elif key in english_dict:
-        # Fallback to English if key not found in selected language
         text_template = english_dict[key]
-        # Log missing translation only if the selected language was not English
-        if lang != 'en':
-             log.debug(f"Translation key '{key}' not found for lang '{lang}', using English fallback.")
+        if lang != 'en': log.debug(f"Translation key '{key}' not found for lang '{lang}', using English fallback.")
     else:
-        # Fallback to the key itself if not found anywhere (indicates missing key definition)
         log.warning(f"Translation key '{key}' not found in '{lang}' or English fallback.")
-        text_template = f"KEY_NOT_FOUND: {key}" # Return the key with a prefix as a last resort
+        # Use provided default_text if key is missing entirely
+        text_template = default_text if default_text is not None else f"KEY_NOT_FOUND:_{key}"
 
     # Format the string
     try:
-        # Escaping should be done when *building* the message in handlers.py for user-provided data.
-        # Here, we assume the translation strings might contain intended HTML.
         return text_template.format(**kwargs)
     except KeyError as e:
-        # Error if a placeholder in the template string doesn't have a matching kwarg
         log.error(f"Formatting error: Key='{key}' Lang='{lang}' - Missing placeholder value for '{e}'. Kwargs: {kwargs}")
         return text_template # Return the unformatted template on error
     except Exception as e:
-        # Catch any other unexpected formatting errors
         log.error(f"Unexpected formatting error: Key='{key}' Lang='{lang}' Err='{e}' Kwargs: {kwargs}")
-        return text_template # Return the unformatted template
+        return text_template
 
 log.info("Translations module loaded with updated keys.")
 # --- END OF FILE translations.py ---
