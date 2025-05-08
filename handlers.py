@@ -60,7 +60,7 @@ from utils import get_user_id_and_lang, send_or_edit_message, clear_conversation
 
 # Import admin handlers for use as state handlers (ensure they are async)
 from admin_handlers import (
-    admin_process_task_message, # Assume these are async now in admin_handlers.py
+    admin_process_task_message,
     admin_process_task_schedule,
     admin_process_task_target
 )
@@ -79,9 +79,8 @@ def simple_async_test(update: Update, context: CallbackContext, message: str):
         log.error(f"simple_async_test: EXCEPTION - {e}", exc_info=True)
     log.info("simple_async_test: EXITED!")
 
-# --- Synchronous Error Handler (for testing) ---
+# --- Synchronous Error Handler ---
 def sync_error_handler(update: object, context: CallbackContext) -> None:
-    """Log the error (synchronous version for testing)."""
     log.error(msg="[sync_error_handler] Exception while handling an update:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_chat:
         try: pass
@@ -89,7 +88,6 @@ def sync_error_handler(update: object, context: CallbackContext) -> None:
 
 # --- Async Error Handler ---
 async def async_error_handler(update: object, context: CallbackContext) -> None:
-    """Log the error and send a telegram message to notify the developer."""
     log.error(msg="[async_error_handler] Exception while handling an update:", exc_info=context.error)
     user_id = None; chat_id = None
     try:
@@ -111,8 +109,7 @@ def format_dt(timestamp: int | None, tz=LITHUANIA_TZ, fmt='%Y-%m-%d %H:%M') -> s
     except (ValueError, TypeError, OSError) as e: log.warning(f"Could not format invalid timestamp: {timestamp}. Error: {e}"); return "Invalid Date"
 
 def build_client_menu(user_id, context: CallbackContext): # Sync
-    lang = context.user_data.get(CTX_LANG, 'en')
-    client_info = db.find_client_by_user_id(user_id)
+    lang = context.user_data.get(CTX_LANG, 'en'); client_info = db.find_client_by_user_id(user_id)
     if not client_info: return get_text(user_id, 'unknown_user', lang_override=lang), None, ParseMode.HTML
     code = client_info['invitation_code']; sub_end_ts = client_info['subscription_end']; now_ts = int(datetime.now(UTC_TZ).timestamp())
     is_expired = sub_end_ts < now_ts; end_date = format_dt(sub_end_ts, fmt='%Y-%m-%d') if sub_end_ts else 'N/A'; expiry_warning = " ⚠️ <b>Expired</b>" if is_expired else ""
@@ -122,10 +119,9 @@ def build_client_menu(user_id, context: CallbackContext): # Sync
     if userbot_phones:
         for i, phone in enumerate(userbot_phones, 1):
             bot_db_info = db.find_userbot(phone); username = bot_db_info['username'] if bot_db_info else None; status_str = bot_db_info['status'].capitalize() if bot_db_info else 'Unknown'
-            last_error = bot_db_info['last_error'] if bot_db_info else None; display_name = html.escape(f"@{username}" if username else phone); status_icon = "⚪️" # Default icon
+            last_error = bot_db_info['last_error'] if bot_db_info else None; display_name = html.escape(f"@{username}" if username else phone); status_icon = "⚪️"
             if bot_db_info:
-                status = bot_db_info['status'] # Get status once
-                # CORRECTED if/elif block
+                status = bot_db_info['status']
                 if status == 'active': status_icon = "🟢"
                 elif status == 'error': status_icon = "🔴"
                 elif status in ['connecting', 'authenticating', 'initializing']: status_icon = "⏳"
@@ -153,41 +149,99 @@ def build_pagination_buttons(base_callback_data: str, current_page: int, total_i
 
 # --- Internal Async Menu Helper ---
 async def _show_menu_async(update: Update, context: CallbackContext, menu_builder_func):
+    """Internal: Asynchronously shows a menu using the provided menu builder function."""
     user_id, lang = get_user_id_and_lang(update, context)
-    title, markup, parse_mode = menu_builder_func(user_id, context)
+    title, markup, parse_mode = menu_builder_func(user_id, context) # menu_builder_func must be synchronous
     await send_or_edit_message(update, context, title, reply_markup=markup, parse_mode=parse_mode)
 
-# --- Command Handlers ---
-async def start_command(update: Update, context: CallbackContext) -> int:
+
+# --- Internal Async Command Logic ---
+async def _async_start_command(update: Update, context: CallbackContext):
+    """Async logic for /start command. Doesn't return state."""
+    user_id, lang = get_user_id_and_lang(update, context) # User/Lang already set by wrapper
+    log.info(f"_async_start_command running for user {user_id}")
     try:
-        user_id, lang = get_user_id_and_lang(update, context); log.info(f"Start command received from user {user_id}")
-        clear_conversation_data(context); context.user_data[CTX_USER_ID] = user_id; context.user_data[CTX_LANG] = lang
-        if is_admin(user_id): await _show_menu_async(update, context, build_admin_menu); log.debug("Returning ConversationHandler.END from start_command (admin)"); return ConversationHandler.END
+        if is_admin(user_id):
+            await _show_menu_async(update, context, build_admin_menu)
+        else:
+            client = db.find_client_by_user_id(user_id)
+            if client:
+                await _show_menu_async(update, context, build_client_menu)
+            else:
+                # Ask for code (This part is handled by the sync wrapper now)
+                await send_or_edit_message(update, context, get_text(user_id, 'ask_invitation_code', lang_override=lang), parse_mode=ParseMode.HTML)
+    except Exception as e:
+        log.error(f"Error in _async_start_command: {e}", exc_info=True)
+        user_id_err, lang_err = get_user_id_and_lang(update, context)
+        try: await send_or_edit_message(update, context, get_text(user_id_err, 'error_generic', lang_override=lang_err), parse_mode=ParseMode.HTML)
+        except Exception as send_err: log.error(f"Failed to send error message in _async_start_command handler: {send_err}")
+
+async def _async_admin_command(update: Update, context: CallbackContext):
+    """Async logic for /admin command. Doesn't return state."""
+    user_id, lang = get_user_id_and_lang(update, context)
+    log.info(f"_async_admin_command running for user {user_id}")
+    try:
+        if not is_admin(user_id):
+            log.warning(f"Unauthorized admin access attempt in _async_admin_command from user {user_id}")
+            await send_or_edit_message(update, context, get_text(user_id, 'not_admin', lang_override=lang), parse_mode=ParseMode.HTML)
+        else:
+            await _show_menu_async(update, context, build_admin_menu)
+    except Exception as e:
+        log.error(f"Error in _async_admin_command: {e}", exc_info=True)
+        user_id_err, lang_err = get_user_id_and_lang(update, context)
+        try: await send_or_edit_message(update, context, get_text(user_id_err, 'error_generic', lang_override=lang_err), parse_mode=ParseMode.HTML)
+        except Exception as send_err: log.error(f"Failed to send error message in _async_admin_command handler: {send_err}")
+
+# --- Synchronous Command Wrappers (Entry Points) ---
+def start_command(update: Update, context: CallbackContext) -> int | None:
+    """Synchronous wrapper for /start. Schedules async logic and returns state/END."""
+    log.debug("Sync start_command wrapper called.")
+    user_id, lang = get_user_id_and_lang(update, context)
+    context.user_data[CTX_USER_ID] = user_id
+    context.user_data[CTX_LANG] = lang
+    clear_conversation_data(context) # Clear volatile data but keep user_id/lang/message_id
+
+    if is_admin(user_id):
+        context.dispatcher.run_async(_async_admin_command, update, context) # Show admin menu async
+        log.debug("Sync start_command scheduling admin menu, returning END.")
+        return ConversationHandler.END # End conversation turn immediately
+    else:
         client = db.find_client_by_user_id(user_id)
-        if client: await _show_menu_async(update, context, build_client_menu); log.debug("Returning ConversationHandler.END from start_command (client)"); return ConversationHandler.END
-        await send_or_edit_message(update, context, get_text(user_id, 'ask_invitation_code', lang_override=lang), parse_mode=ParseMode.HTML); log.debug("Returning STATE_WAITING_FOR_CODE from start_command"); return STATE_WAITING_FOR_CODE
-    except Exception as e:
-        log.error(f"Error in start_command: {e}", exc_info=True); user_id_err, lang_err = get_user_id_and_lang(update, context)
-        try: await send_or_edit_message(update, context, get_text(user_id_err, 'error_generic', lang_override=lang_err), parse_mode=ParseMode.HTML)
-        except Exception as send_err: log.error(f"Failed to send error message in start_command handler: {send_err}")
-        log.debug("Returning ConversationHandler.END from start_command (exception)"); return ConversationHandler.END
+        if client:
+            context.dispatcher.run_async(_async_start_command, update, context) # Show client menu async
+            log.debug("Sync start_command scheduling client menu, returning END.")
+            return ConversationHandler.END # End conversation turn immediately
+        else:
+            # Need to enter conversation to wait for code
+            context.dispatcher.run_async(send_or_edit_message, update, context, get_text(user_id, 'ask_invitation_code', lang_override=lang), parse_mode=ParseMode.HTML)
+            log.debug("Sync start_command returning STATE_WAITING_FOR_CODE.")
+            return STATE_WAITING_FOR_CODE
 
-async def admin_command(update: Update, context: CallbackContext) -> int:
-    try:
-        user_id, lang = get_user_id_and_lang(update, context); log.info(f"Admin command received from user {user_id}")
-        clear_conversation_data(context); context.user_data[CTX_USER_ID] = user_id; context.user_data[CTX_LANG] = lang
-        if not is_admin(user_id): log.warning(f"Unauthorized admin access attempt from user {user_id}"); await send_or_edit_message(update, context, get_text(user_id, 'not_admin', lang_override=lang), parse_mode=ParseMode.HTML); log.debug("Returning ConversationHandler.END from admin_command (not admin)"); return ConversationHandler.END
-        await _show_menu_async(update, context, build_admin_menu); log.debug("Returning ConversationHandler.END from admin_command (admin)"); return ConversationHandler.END
-    except Exception as e:
-        log.error(f"Error in admin_command: {e}", exc_info=True); user_id_err, lang_err = get_user_id_and_lang(update, context)
-        try: await send_or_edit_message(update, context, get_text(user_id_err, 'error_generic', lang_override=lang_err), parse_mode=ParseMode.HTML)
-        except Exception as send_err: log.error(f"Failed to send error message in admin_command handler: {send_err}")
-        log.debug("Returning ConversationHandler.END from admin_command (exception)"); return ConversationHandler.END
+def admin_command(update: Update, context: CallbackContext) -> int | None:
+    """Synchronous wrapper for /admin. Schedules async logic and returns END."""
+    log.debug("Sync admin_command wrapper called.")
+    user_id, lang = get_user_id_and_lang(update, context)
+    context.user_data[CTX_USER_ID] = user_id
+    context.user_data[CTX_LANG] = lang
+    clear_conversation_data(context)
 
+    context.dispatcher.run_async(_async_admin_command, update, context) # Schedule async part
+    log.debug("Sync admin_command scheduling admin logic, returning END.")
+    return ConversationHandler.END # End conversation turn immediately
+
+# Cancel remains async as it's simple and clearly ends
 async def cancel_command(update: Update, context: CallbackContext) -> int:
+    """Cancel command handler."""
     try:
-        user_id, lang = get_user_id_and_lang(update, context); await send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang_override=lang), parse_mode=ParseMode.HTML, reply_markup=None); clear_conversation_data(context); log.debug("Cancel returning END"); return ConversationHandler.END
-    except Exception as e: log.error(f"Error in cancel_command: {e}", exc_info=True); await async_error_handler(update, context); return ConversationHandler.END
+        user_id, lang = get_user_id_and_lang(update, context)
+        await send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang_override=lang), parse_mode=ParseMode.HTML, reply_markup=None)
+        clear_conversation_data(context)
+        log.debug("Cancel returning END")
+        return ConversationHandler.END
+    except Exception as e:
+        log.error(f"Error in cancel_command: {e}", exc_info=True)
+        await async_error_handler(update, context)
+        return ConversationHandler.END
 
 # --- Conversation State Handlers ---
 async def process_invitation_code(update: Update, context: CallbackContext) -> int:
@@ -195,10 +249,7 @@ async def process_invitation_code(update: Update, context: CallbackContext) -> i
     client_info_db = db.find_client_by_user_id(user_id)
     if client_info_db:
         now_ts = int(datetime.now(UTC_TZ).timestamp())
-        if client_info_db['subscription_end'] > now_ts:
-            await send_or_edit_message(update, context, get_text(user_id, 'user_already_active', lang_override=lang))
-            await client_menu(update, context);
-            return ConversationHandler.END # End if already active
+        if client_info_db['subscription_end'] > now_ts: await send_or_edit_message(update, context, get_text(user_id, 'user_already_active', lang_override=lang)); await client_menu(update, context); return ConversationHandler.END
     success, reason_or_client_data = db.activate_client(code_input, user_id)
     if success:
         if reason_or_client_data == "activation_success":
@@ -886,7 +937,7 @@ async def admin_remove_userbot_confirmed_execute(update: Update, context: Callba
         log.info(f"Attempting to remove session files for {phone_to_remove}..."); telethon_api.delete_session_files_for_phone(phone_to_remove)
         db.log_event_db("Userbot Removed", f"Phone: {phone_to_remove}", user_id=user_id, userbot_phone=phone_to_remove); await send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_remove_success', lang_override=lang, display_name=display_name))
     else: await send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_remove_error', lang_override=lang))
-    return await admin_command(update, context)
+    return await admin_command(update, context) # Go back to admin menu
 
 async def admin_view_subscriptions(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; await query.answer()
@@ -959,7 +1010,8 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> str
             try: await query.answer()
             except Exception: pass
         log.debug(f"main_callback_handler returning state: {next_state}")
-        return next_state # Return state or END as determined by sub-handler
+        # Return the determined state or END
+        return next_state
     except Exception as e:
         log.error(f"Error in main_callback_handler for data '{data}': {e}", exc_info=True)
         if query and not query._answered:
@@ -1069,19 +1121,21 @@ async def handle_generic_callback(update: Update, context: CallbackContext) -> s
     if action == "cancel" or action == "confirm_no":
         await send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang_override=lang), reply_markup=None)
         clear_conversation_data(context); return ConversationHandler.END
-    elif action == "noop": return None # Explicitly return None for no state change
+    elif action == "noop": return None
     else: log.warning(f"Unhandled GENERIC CB: Action='{action}', Data='{data}'"); await send_or_edit_message(update,context,get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Generic action not recognized.")); return ConversationHandler.END
+
 
 # --- Conversation Handler Definition ---
 # THIS MUST BE AT THE END OF THE FILE, AFTER ALL HANDLER FUNCTIONS ARE DEFINED
 main_conversation = ConversationHandler(
     entry_points=[
+        # Use the SYNC wrappers as entry points
         CommandHandler('start', start_command),
         CommandHandler('admin', admin_command),
-        CommandHandler('cancel', cancel_command)
+        CommandHandler('cancel', cancel_command) # Async is okay for cancel
     ],
     states={
-        # States expecting text input
+        # States expecting text input (these handlers are already async)
         STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command, process_invitation_code)],
         STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command, process_admin_phone)],
         STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_id)],
@@ -1127,7 +1181,7 @@ main_conversation = ConversationHandler(
 log.info("Handlers module loaded and structure updated.")
 
 # --- Admin Task Management Handlers ---
-# (Keep definitions here as they are called by handle_admin_callback)
+# (Definitions included above)
 async def admin_task_menu(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     if query: await query.answer()
@@ -1185,7 +1239,7 @@ async def admin_task_options(update: Update, context: CallbackContext) -> int:
     keyboard = [[InlineKeyboardButton(toggle_text, callback_data=f"{CALLBACK_ADMIN_PREFIX}toggle_task_status_{task_id}")], [InlineKeyboardButton(get_text(user_id, 'admin_task_delete_button', lang_override=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}delete_task_confirm_{task_id}")], [InlineKeyboardButton(get_text(user_id, 'button_back', lang_override=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}view_tasks?page=0")]]; markup = InlineKeyboardMarkup(keyboard)
     details_text = f"<b>Task #{task_id} Details</b>\n"; details_text += f"Status: {status_icon} {html.escape(task['status'].capitalize())}\n"; details_text += f"Bot: {html.escape(task['userbot_phone'])}\n"; details_text += f"Message: <pre>{html.escape(task['message'][:100])}{'...' if len(task['message']) > 100 else ''}</pre>\n"; details_text += f"Schedule: <code>{html.escape(task['schedule'])}</code>\n"; details_text += f"Target: {html.escape(task['target'])}\n"; details_text += f"Last Run: {format_dt(task['last_run']) if task['last_run'] else 'Never'}\n"; details_text += f"Next Run Estimate: {format_dt(task['next_run']) if task['next_run'] else 'Not Scheduled'}\n"
     await send_or_edit_message(update, context, details_text, reply_markup=markup, parse_mode=ParseMode.HTML)
-    return ConversationHandler.END # Display only
+    return ConversationHandler.END
 
 async def admin_toggle_task_status(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; await query.answer()
