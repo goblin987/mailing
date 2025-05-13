@@ -295,4 +295,50 @@ def is_admin(user_id: int) -> bool:
     return isinstance(user_id, int) and ADMIN_IDS and user_id in ADMIN_IDS
 
 log.info("Configuration loaded successfully.")
+
+# State definitions for conversation
+STATE_WAITING_FOR_COMMAND = 'WAITING_FOR_COMMAND'
+STATE_WAITING_FOR_ADMIN_COMMAND = 'WAITING_FOR_ADMIN_COMMAND'
+
+# Admin IDs list
+ADMIN_IDS = [7054186974]  # Replace with your actual admin IDs
+
+async def get_user(user_id: int):
+    """Get user from database."""
+    # Implement your database query here
+    return None
+
+async def create_user(user_id: int, username: str):
+    """Create new user in database."""
+    # Implement your database insertion here
+    pass
+
+async def get_user_language(user_id: int) -> str:
+    """Get user's preferred language."""
+    # Implement your language retrieval logic here
+    return 'en'
+
+def get_text(key: str, lang: str = 'en') -> str:
+    """Get localized text."""
+    # Implement your text localization logic here
+    texts = {
+        'en': {
+            'welcome_message': 'Welcome to the bot! Use /admin to access admin features.',
+            'not_admin': 'Sorry, this command is only available for administrators.',
+            'admin_menu': 'Admin Menu:\n1. Manage Users\n2. Settings\n3. Statistics',
+        }
+    }
+    return texts.get(lang, texts['en']).get(key, key)
+
+def build_admin_menu(user_id: int, context: 'CallbackContext'):
+    """Build admin menu keyboard."""
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    
+    keyboard = [
+        [InlineKeyboardButton("Manage Users", callback_data='admin_users')],
+        [InlineKeyboardButton("Settings", callback_data='admin_settings')],
+        [InlineKeyboardButton("Statistics", callback_data='admin_stats')]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 # --- END OF FILE config.py ---
