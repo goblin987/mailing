@@ -69,26 +69,31 @@ from admin_handlers import (
 # Add this at the top of the file, after imports
 from functools import wraps
 from typing import Callable, Any
+import logging
+from inspect import isawaitable
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import (
+    CallbackContext, ConversationHandler, CommandHandler,
+    MessageHandler, CallbackQueryHandler, Filters
+)
+from config import (
+    STATE_WAITING_FOR_COMMAND, STATE_WAITING_FOR_ADMIN_COMMAND,
+    ADMIN_IDS, get_text, get_user, create_user, get_user_language,
+    build_admin_menu
+)
 
 def async_handler(func: Callable) -> Callable:
-    """Decorator to properly handle async conversation handlers."""
+    """Decorator to handle async handlers and ensure proper state returns."""
     @wraps(func)
     async def wrapped(update: Update, context: CallbackContext, *args: Any, **kwargs: Any) -> int:
         try:
-            log.debug(f"Entering async handler for {func.__name__}")
             result = await func(update, context, *args, **kwargs)
-            log.debug(f"Exiting async handler for {func.__name__} with result {result}")
+            # Ensure we return an integer state, not a coroutine
+            if isawaitable(result):
+                result = await result
             return result
         except Exception as e:
-            log.error(f"Error in {func.__name__}: {e}", exc_info=True)
-            user_id, lang = get_user_id_and_lang(update, context)
-            try:
-                await update.message.reply_text(
-                    get_text(user_id, 'error_generic', lang_override=lang),
-                    parse_mode=ParseMode.HTML
-                )
-            except Exception as reply_error:
-                log.error(f"Failed to send error message: {reply_error}")
+            logging.error(f"Error in {func.__name__}: {e}", exc_info=True)
             return ConversationHandler.END
     return wrapped
 
