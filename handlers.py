@@ -183,7 +183,8 @@ async def _show_menu_async(update: Update, context: CallbackContext, menu_builde
     await send_or_edit_message(update, context, title, reply_markup=markup, parse_mode=parse_mode)
 
 # --- COMMAND HANDLERS (NOW ASYNC) ---
-async def start_command(update: Update, context: CallbackContext) -> int | None:
+async def start_command(update: Update, context: CallbackContext) -> int:
+    """Entry point for the /start command."""
     log.debug("Async start_command called.")
     user_id, lang = get_user_id_and_lang(update, context)
     
@@ -197,69 +198,69 @@ async def start_command(update: Update, context: CallbackContext) -> int | None:
     try:
         if is_admin(user_id):
             await _show_menu_async(update, context, build_admin_menu)
-            log.debug("Async start_command (admin) showed admin menu, returning ConversationHandler.END.")
+            return ConversationHandler.END
+        
+        # Check if user exists in database
+        client_info = db.find_client_by_user_id(user_id)
+        if client_info:
+            await _show_menu_async(update, context, build_client_menu)
             return ConversationHandler.END
         else:
-            client = db.find_client_by_user_id(user_id)
-            if client:
-                await _show_menu_async(update, context, build_client_menu)
-                log.debug("Async start_command (client) showed client menu, returning ConversationHandler.END.")
-                return ConversationHandler.END
-            else:
-                await send_or_edit_message(update, context, get_text(user_id, 'ask_invitation_code', lang_override=lang), parse_mode=ParseMode.HTML)
-                log.debug("Async start_command (new user) asked for code, returning STATE_WAITING_FOR_CODE.")
-                return STATE_WAITING_FOR_CODE
+            # New user, ask for invitation code
+            await update.message.reply_text(
+                get_text(user_id, 'welcome_new_user', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return STATE_WAITING_FOR_CODE
     except Exception as e:
-        log.error(f"Error in async start_command for user {user_id}: {e}", exc_info=True)
-        try:
-            err_user_id, err_lang = get_user_id_and_lang(update, context)
-            await send_or_edit_message(update, context, get_text(err_user_id, 'error_generic', lang_override=err_lang), parse_mode=ParseMode.HTML)
-        except Exception as send_err:
-            log.error(f"Failed to send error message in async_start_command handler: {send_err}")
+        log.error(f"Error in start_command: {e}", exc_info=True)
+        await update.message.reply_text(
+            get_text(user_id, 'error_generic', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
         return ConversationHandler.END
 
-async def admin_command(update: Update, context: CallbackContext) -> int | None:
-    log.debug("Async admin_command called.")
+async def admin_command(update: Update, context: CallbackContext) -> int:
+    """Entry point for the /admin command."""
     user_id, lang = get_user_id_and_lang(update, context)
     
-    if CTX_USER_ID not in context.user_data and user_id:
-        context.user_data[CTX_USER_ID] = user_id
-    if CTX_LANG not in context.user_data and lang:
-        context.user_data[CTX_LANG] = lang
-
-    clear_conversation_data(context)
-
+    if not is_admin(user_id):
+        await update.message.reply_text(
+            get_text(user_id, 'error_not_admin', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+    
     try:
-        if not is_admin(user_id):
-            log.warning(f"Unauthorized admin access attempt in admin_command from user {user_id}")
-            await send_or_edit_message(update, context, get_text(user_id, 'not_admin', lang_override=lang), parse_mode=ParseMode.HTML)
-        else:
-            await _show_menu_async(update, context, build_admin_menu)
-        log.debug("Async admin_command finished, returning ConversationHandler.END.")
+        await _show_menu_async(update, context, build_admin_menu)
         return ConversationHandler.END
     except Exception as e:
-        log.error(f"Error in async admin_command for user {user_id}: {e}", exc_info=True)
-        try:
-            err_user_id, err_lang = get_user_id_and_lang(update, context)
-            await send_or_edit_message(update, context, get_text(err_user_id, 'error_generic', lang_override=err_lang), parse_mode=ParseMode.HTML)
-        except Exception as send_err:
-            log.error(f"Failed to send error message in async_admin_command handler: {send_err}")
+        log.error(f"Error in admin_command: {e}", exc_info=True)
+        await update.message.reply_text(
+            get_text(user_id, 'error_generic', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
         return ConversationHandler.END
 
 async def cancel_command(update: Update, context: CallbackContext) -> int:
+    """Cancel the current conversation."""
+    user_id, lang = get_user_id_and_lang(update, context)
+    clear_conversation_data(context)
+    
     try:
-        user_id, lang = get_user_id_and_lang(update, context)
-        await send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang_override=lang), parse_mode=ParseMode.HTML, reply_markup=None)
-        clear_conversation_data(context)
-        log.debug("Cancel command processed, returning ConversationHandler.END")
-        return ConversationHandler.END
+        await update.message.reply_text(
+            get_text(user_id, 'cancelled', lang_override=lang),
+            parse_mode=ParseMode.HTML,
+            reply_markup=None
+        )
     except Exception as e:
         log.error(f"Error in cancel_command: {e}", exc_info=True)
-        if update and update.effective_chat:
-            try: await context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred cancelling. State cleared.")
-            except: pass
-        clear_conversation_data(context)
-        return ConversationHandler.END
+        await update.message.reply_text(
+            get_text(user_id, 'error_generic', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
+    
+    return ConversationHandler.END
 
 # --- Client Menu (separate async function for direct call if needed) ---
 async def client_menu(update: Update, context: CallbackContext):
@@ -2257,33 +2258,34 @@ main_conversation = ConversationHandler(
         STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_code)],
         STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_count)],
         STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command, process_folder_links)], # Changed to process_folder_links
+        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command, process_folder_links)],
         STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command, process_folder_rename)],
         STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'primary'))],
         STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'fallback'))],
         STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command, process_task_start_time)],
-        
         STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_message)],
         STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_schedule)],
         STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_target)],
-
         STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
         STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
         STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler)],
-        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(main_callback_handler)], 
+        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_LANGUAGE: [CallbackQueryHandler(main_callback_handler)],
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command),
-        CallbackQueryHandler(main_callback_handler), 
+        CallbackQueryHandler(main_callback_handler),
         MessageHandler(Filters.all, conversation_fallback)
     ],
     name="main_conversation",
     persistent=False,
-    allow_reentry=True
+    allow_reentry=True,
+    per_message=False,
+    per_chat=True,
+    run_async=True  # Enable async mode for all handlers
 )
 
 log.info("Handlers module loaded and structure updated (async command handlers, ConversationHandler at end).")
