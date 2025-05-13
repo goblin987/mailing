@@ -101,6 +101,7 @@ async def start_command(update: Update, context: CallbackContext) -> int:
     try:
         # Check if user is admin first
         if is_admin(user_id):
+            log.info(f"Admin user {user_id} started the bot")
             await update.message.reply_text(
                 get_text(user_id, 'welcome_admin', lang_override=lang),
                 parse_mode=ParseMode.HTML
@@ -112,6 +113,7 @@ async def start_command(update: Update, context: CallbackContext) -> int:
         client_info = db.find_client_by_user_id(user_id)
         if client_info:
             # Existing client
+            log.info(f"Existing client {user_id} started the bot")
             await update.message.reply_text(
                 get_text(user_id, 'welcome_back', lang_override=lang),
                 parse_mode=ParseMode.HTML
@@ -120,13 +122,14 @@ async def start_command(update: Update, context: CallbackContext) -> int:
             return ConversationHandler.END
         else:
             # New user
+            log.info(f"New user {user_id} started the bot")
             await update.message.reply_text(
                 get_text(user_id, 'welcome_new_user', lang_override=lang),
                 parse_mode=ParseMode.HTML
             )
             return STATE_WAITING_FOR_CODE
     except Exception as e:
-        log.error(f"Error in start_command: {e}", exc_info=True)
+        log.error(f"Error in start_command for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text(
             get_text(user_id, 'error_generic', lang_override=lang),
             parse_mode=ParseMode.HTML
@@ -2063,49 +2066,49 @@ async def main_callback_handler(update: Update, context: CallbackContext) -> int
 # THIS MUST BE AT THE END OF THE FILE, AFTER ALL HANDLER FUNCTIONS ARE DEFINED
 main_conversation = ConversationHandler(
     entry_points=[
-        CommandHandler('start', start_command),
-        CommandHandler('admin', admin_command),
-        CommandHandler('cancel', cancel_command)
+        CommandHandler('start', start_command, run_async=True),
+        CommandHandler('admin', admin_command, run_async=True),
+        CommandHandler('cancel', cancel_command, run_async=True)
     ],
     states={
-        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command, process_invitation_code)],
-        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command, process_admin_phone)],
-        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_id)],
-        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_hash)],
-        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_code)],
-        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_password)],
-        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command, process_admin_invite_details)],
-        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_code)],
-        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_days)],
-        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_code)],
-        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_count)],
-        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command, process_folder_links)],
-        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command, process_folder_rename)],
-        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'primary'))],
-        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'fallback'))],
-        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command, process_task_start_time)],
-        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_message)],
-        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_schedule)],
-        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_target)],
-        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
-        STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler)],
-        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_LANGUAGE: [CallbackQueryHandler(main_callback_handler)],
+        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command, process_invitation_code, run_async=True)],
+        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command, process_admin_phone, run_async=True)],
+        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_id, run_async=True)],
+        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_hash, run_async=True)],
+        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_code, run_async=True)],
+        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_password, run_async=True)],
+        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command, process_admin_invite_details, run_async=True)],
+        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_code, run_async=True)],
+        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_days, run_async=True)],
+        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_code, run_async=True)],
+        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_count, run_async=True)],
+        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name, run_async=True)],
+        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command, process_folder_links, run_async=True)],
+        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command, process_folder_rename, run_async=True)],
+        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'primary'), run_async=True)],
+        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'fallback'), run_async=True)],
+        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command, process_task_start_time, run_async=True)],
+        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_message, run_async=True)],
+        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_schedule, run_async=True)],
+        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_target, run_async=True)],
+        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(main_callback_handler, run_async=True)],
+        STATE_WAITING_FOR_LANGUAGE: [CallbackQueryHandler(main_callback_handler, run_async=True)],
     },
     fallbacks=[
-        CommandHandler('cancel', cancel_command),
-        CallbackQueryHandler(main_callback_handler),
-        MessageHandler(Filters.all, conversation_fallback)
+        CommandHandler('cancel', cancel_command, run_async=True),
+        CallbackQueryHandler(main_callback_handler, run_async=True),
+        MessageHandler(Filters.all, conversation_fallback, run_async=True)
     ],
     name="main_conversation",
     persistent=False,
     allow_reentry=True,
-    per_message=False,
+    per_message=True,  # Changed to True to properly track async handlers
     per_chat=True,
     run_async=True
 )
