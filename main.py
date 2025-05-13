@@ -103,9 +103,13 @@ async def main():
         updater = Updater(BOT_TOKEN, use_context=True, workers=4)
         dp = updater.dispatcher
 
-        # Add conversation handler
-        dp.add_handler(handlers.main_conversation)
-        log.info("Main conversation handler registered.")
+        # Get the conversation handler from handlers module
+        conv_handler = handlers.main()
+        if conv_handler:
+            dp.add_handler(conv_handler)
+            log.info("Main conversation handler registered.")
+        else:
+            log.error("Failed to create conversation handler")
 
         # Register the error handler
         dp.add_error_handler(handlers.async_error_handler)
