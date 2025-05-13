@@ -7,6 +7,7 @@ import asyncio
 import threading
 import time # For potential delays if needed
 import os # Import os for path operations
+import logging
 
 # Import configurations and modules
 # Ensure config is imported first if other modules rely on its side effects (like logging setup)
@@ -90,79 +91,55 @@ def signal_handler(signum, frame):
 # --- Main Function ---
 async def main():
     """Main function to initialize and start the bot."""
-    global updater, checker_thread, checker_loop
+    global updater
 
     log.info("--- Starting Telegram Bot ---")
     if not ADMIN_IDS:
-        log.critical("CRITICAL: No valid ADMIN_IDS configured in environment variables. Bot may not function correctly. Exiting.")
+        log.critical("CRITICAL: No valid ADMIN_IDS configured in environment variables. Exiting.")
         sys.exit(1)
 
-    # --- Initialize PTB ---
-    log.info("Initializing PTB Updater...")
     try:
-        updater = Updater(token=BOT_TOKEN, use_context=True, workers=4)  # Added workers parameter
-        log.info("PTB Updater initialized with 4 workers.")
-    except Exception as e:
-        log.critical(f"CRITICAL: Failed to initialize PTB Updater: {e}", exc_info=True)
-        sys.exit(1)
+        # Create the Updater and pass it your bot's token
+        updater = Updater(BOT_TOKEN, use_context=True, workers=4)
+        dp = updater.dispatcher
 
-    dp: Dispatcher = updater.dispatcher
-    dp.use_context = True
-
-    # --- Register Handlers ---
-    log.info("Registering handlers...")
-
-    if handlers.main_conversation:
+        # Add conversation handler
         dp.add_handler(handlers.main_conversation)
         log.info("Main conversation handler registered.")
-    else:
-        log.critical("CRITICAL: Main conversation handler not found in handlers module!")
-        sys.exit(1)
 
-    # Register the error handler
-    dp.add_error_handler(handlers.async_error_handler)
-    log.info("Error handler registered.")
+        # Register the error handler
+        dp.add_error_handler(handlers.async_error_handler)
+        log.info("Error handler registered.")
 
-    # --- Initialize Telethon Userbots ---
-    log.info("Initializing Telethon userbot runtimes...")
-    try:
+        # Initialize Telethon Userbots
+        log.info("Initializing Telethon userbot runtimes...")
         await telethon_api.initialize_all_userbots()
         log.info("Telethon userbot initialization process requested.")
-    except Exception as e:
-        log.error(f"Error during initial userbot runtime initialization request: {e}", exc_info=True)
 
-    # --- Start Background Task Checker ---
-    log.info("Starting background tasks...")
-    background_task = asyncio.create_task(run_background_tasks())
-    log.info("Background tasks started.")
+        # Start Background Task Checker
+        log.info("Starting background tasks...")
+        background_task = asyncio.create_task(run_background_tasks())
+        log.info("Background tasks started.")
 
-    # --- Register Signal Handlers ---
-    log.info("Registering shutdown signal handlers...")
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, signal_handler)
-    log.info("Signal handlers registered.")
+        # Register Signal Handlers
+        log.info("Registering shutdown signal handlers...")
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, signal_handler)
+        log.info("Signal handlers registered.")
 
-    # --- Start Bot ---
-    log.info("Starting PTB polling...")
-    try:
+        # Start the Bot
         updater.start_polling(drop_pending_updates=True)
         log.info("--- Bot is now running ---")
         log.info("Press Ctrl+C or send SIGTERM to stop.")
-        
-        # Keep the main task running and handle background tasks
+
+        # Keep the bot running
         while True:
             await asyncio.sleep(1)
-            
+
     except Exception as e:
-        log.error(f"Error in main polling loop: {e}", exc_info=True)
+        log.error(f"Error in main: {e}", exc_info=True)
         await async_shutdown()
-    finally:
-        if 'background_task' in locals():
-            background_task.cancel()
-            try:
-                await background_task
-            except asyncio.CancelledError:
-                pass
+        sys.exit(1)
 
 if __name__ == '__main__':
     try:
@@ -176,4 +153,5 @@ if __name__ == '__main__':
             asyncio.run(async_shutdown())
         except:
             pass
+        sys.exit(1)
 # --- END OF FILE main.py ---
