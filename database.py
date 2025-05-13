@@ -214,75 +214,68 @@ def log_event_db(event, details="", user_id=None, userbot_phone=None):
 
 # --- Client Functions ---
 def find_client_by_user_id(user_id):
-    """Retrieves client data by Telegram User ID."""
-    sql = "SELECT * FROM clients WHERE user_id = ?"
+    """Find a client by their Telegram user ID."""
     try:
-        conn = _get_db_connection()
         with db_lock:
-            cursor = conn.cursor()
-            cursor.execute(sql, (user_id,))
-            return cursor.fetchone() # Returns a Row object or None
+            conn = _get_db_connection()
+            cursor = conn.execute(
+                "SELECT * FROM clients WHERE user_id = ?",
+                (user_id,)
+            )
+            result = cursor.fetchone()
+            return dict(result) if result else None
     except sqlite3.Error as e:
-        log.error(f"DB Error finding client by user_id {user_id}: {e}")
+        log.error(f"Database error in find_client_by_user_id: {e}", exc_info=True)
         return None
 
 def find_client_by_code(code):
-    """Retrieves client data by invitation code."""
-    sql = "SELECT * FROM clients WHERE invitation_code = ?"
+    """Find a client by their invitation code."""
     try:
-        conn = _get_db_connection()
         with db_lock:
-            cursor = conn.cursor()
-            cursor.execute(sql, (code,))
-            return cursor.fetchone()
+            conn = _get_db_connection()
+            cursor = conn.execute(
+                "SELECT * FROM clients WHERE invitation_code = ?",
+                (code,)
+            )
+            result = cursor.fetchone()
+            return dict(result) if result else None
     except sqlite3.Error as e:
-        log.error(f"DB Error finding client by code {code}: {e}")
+        log.error(f"Database error in find_client_by_code: {e}", exc_info=True)
         return None
 
 def activate_client(code, user_id):
-    """Attempts to activate a client by assigning a user_id to an invitation code."""
-    sql_check_user = "SELECT invitation_code FROM clients WHERE user_id = ?"
-    sql_check_code = "SELECT user_id, subscription_end FROM clients WHERE invitation_code = ?"
-    sql_update = "UPDATE clients SET user_id = ? WHERE invitation_code = ? AND user_id IS NULL"
+    """Activate a client's account with their invitation code."""
     try:
-        conn = _get_db_connection()
         with db_lock:
-            cursor = conn.cursor()
-            cursor.execute("BEGIN")
-            reason = "activation_error" # Default error reason
+            conn = _get_db_connection()
+            # Start transaction
+            conn.execute("BEGIN")
             try:
-                cursor.execute(sql_check_user, (user_id,))
-                existing_user_code = cursor.fetchone()
-                if existing_user_code and existing_user_code['invitation_code'] != code:
-                    log.warning(f"Activation attempt failed: User {user_id} already linked to code {existing_user_code['invitation_code']}")
-                    reason = "user_already_active"
-                    cursor.execute("ROLLBACK"); return False, reason
+                # Check if code exists and is not used
+                cursor = conn.execute(
+                    "SELECT user_id FROM clients WHERE invitation_code = ?",
+                    (code,)
+                )
+                result = cursor.fetchone()
+                if not result:
+                    conn.execute("ROLLBACK")
+                    return False
 
-                cursor.execute(sql_check_code, (code,))
-                code_data = cursor.fetchone()
-                if not code_data: reason = "code_not_found"; cursor.execute("ROLLBACK"); return False, reason
-                if code_data['user_id'] is not None:
-                    if code_data['user_id'] == user_id: reason = "already_active"; cursor.execute("ROLLBACK"); return True, reason # Already active is success-like
-                    else: reason = "code_already_used"; cursor.execute("ROLLBACK"); return False, reason
-
-                now_ts = int(datetime.now(UTC_TZ).timestamp())
-                if code_data['subscription_end'] < now_ts: reason = "subscription_expired"; cursor.execute("ROLLBACK"); return False, reason
-
-                cursor.execute(sql_update, (user_id, code))
-                if cursor.rowcount > 0:
-                    log.info(f"Client activated: Code={code}, UserID={user_id}")
-                    reason = "activation_success"
-                    cursor.execute("COMMIT"); return True, reason
-                else:
-                    log.error(f"Activation update failed unexpectedly for Code={code}, UserID={user_id}.")
-                    reason = "activation_error"; cursor.execute("ROLLBACK"); return False, reason
-            except sqlite3.Error as tx_e:
-                 log.error(f"DB Tx Error activating client {code} user {user_id}: {tx_e}", exc_info=True)
-                 reason = "activation_db_error"; cursor.execute("ROLLBACK"); return False, reason
-
+                # Update the client record
+                conn.execute(
+                    "UPDATE clients SET user_id = ? WHERE invitation_code = ?",
+                    (user_id, code)
+                )
+                # Commit transaction
+                conn.execute("COMMIT")
+                return True
+            except sqlite3.Error as e:
+                conn.execute("ROLLBACK")
+                log.error(f"Database error in activate_client transaction: {e}", exc_info=True)
+                return False
     except sqlite3.Error as e:
-        log.error(f"DB Connection Error activating client code {code} for user {user_id}: {e}", exc_info=True)
-        return False, "activation_db_error"
+        log.error(f"Database error in activate_client: {e}", exc_info=True)
+        return False
 
 def get_user_language(user_id):
     """Gets the user's preferred language code, defaults to 'en'."""
@@ -866,3 +859,43 @@ except Exception as e:
      # Depending on requirements, might want to sys.exit(1) here if DB is absolutely essential
 
 # --- END OF FILE database.py ---
+
+# Add this after init_db() function
+def init_test_data():
+    """Initialize test data for development."""
+    try:
+        with db_lock:
+            conn = _get_db_connection()
+            # Start transaction
+            conn.execute("BEGIN")
+            try:
+                # Add a test invitation code
+                test_code = "12345678"
+                test_end_date = int((datetime.now(UTC_TZ) + timedelta(days=30)).timestamp())
+                
+                # Check if test code already exists
+                cursor = conn.execute(
+                    "SELECT invitation_code FROM clients WHERE invitation_code = ?",
+                    (test_code,)
+                )
+                if not cursor.fetchone():
+                    conn.execute(
+                        "INSERT INTO clients (invitation_code, subscription_end, language) VALUES (?, ?, ?)",
+                        (test_code, test_end_date, 'en')
+                    )
+                    log.info(f"Added test invitation code: {test_code}")
+                
+                # Commit transaction
+                conn.execute("COMMIT")
+                return True
+            except sqlite3.Error as e:
+                conn.execute("ROLLBACK")
+                log.error(f"Database error in init_test_data transaction: {e}", exc_info=True)
+                return False
+    except sqlite3.Error as e:
+        log.error(f"Database error in init_test_data: {e}", exc_info=True)
+        return False
+
+# Call init_test_data after database initialization
+init_db()
+init_test_data()
