@@ -65,6 +65,83 @@ from admin_handlers import (
     admin_process_task_target
 )
 
+# Add this at the top of the file, after imports
+from functools import wraps
+from typing import Callable, Any
+
+def async_handler(func: Callable) -> Callable:
+    """Decorator to properly handle async conversation handlers."""
+    @wraps(func)
+    async def wrapped(update: Update, context: CallbackContext, *args: Any, **kwargs: Any) -> int:
+        try:
+            return await func(update, context, *args, **kwargs)
+        except Exception as e:
+            log.error(f"Error in {func.__name__}: {e}", exc_info=True)
+            user_id, lang = get_user_id_and_lang(update, context)
+            await update.message.reply_text(
+                get_text(user_id, 'error_generic', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return ConversationHandler.END
+    return wrapped
+
+@async_handler
+async def start_command(update: Update, context: CallbackContext) -> int:
+    """Entry point for the /start command."""
+    log.debug("Async start_command called.")
+    user_id, lang = get_user_id_and_lang(update, context)
+    
+    if CTX_USER_ID not in context.user_data and user_id:
+        context.user_data[CTX_USER_ID] = user_id
+    if CTX_LANG not in context.user_data and lang:
+        context.user_data[CTX_LANG] = lang
+        
+    clear_conversation_data(context)
+
+    if is_admin(user_id):
+        await _show_menu_async(update, context, build_admin_menu)
+        return ConversationHandler.END
+    
+    # Check if user exists in database
+    client_info = db.find_client_by_user_id(user_id)
+    if client_info:
+        await _show_menu_async(update, context, build_client_menu)
+        return ConversationHandler.END
+    else:
+        # New user, ask for invitation code
+        await update.message.reply_text(
+            get_text(user_id, 'welcome_new_user', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return STATE_WAITING_FOR_CODE
+
+@async_handler
+async def admin_command(update: Update, context: CallbackContext) -> int:
+    """Entry point for the /admin command."""
+    user_id, lang = get_user_id_and_lang(update, context)
+    
+    if not is_admin(user_id):
+        await update.message.reply_text(
+            get_text(user_id, 'error_not_admin', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+    
+    await _show_menu_async(update, context, build_admin_menu)
+    return ConversationHandler.END
+
+@async_handler
+async def cancel_command(update: Update, context: CallbackContext) -> int:
+    """Cancel the current conversation."""
+    user_id, lang = get_user_id_and_lang(update, context)
+    clear_conversation_data(context)
+    
+    await update.message.reply_text(
+        get_text(user_id, 'cancelled', lang_override=lang),
+        parse_mode=ParseMode.HTML,
+        reply_markup=None
+    )
+    return ConversationHandler.END
 
 # --- Async Error Handler ---
 async def async_error_handler(update: object, context: CallbackContext) -> None:
@@ -183,43 +260,6 @@ async def _show_menu_async(update: Update, context: CallbackContext, menu_builde
     await send_or_edit_message(update, context, title, reply_markup=markup, parse_mode=parse_mode)
 
 # --- COMMAND HANDLERS (NOW ASYNC) ---
-async def start_command(update: Update, context: CallbackContext) -> int:
-    """Entry point for the /start command."""
-    log.debug("Async start_command called.")
-    user_id, lang = get_user_id_and_lang(update, context)
-    
-    if CTX_USER_ID not in context.user_data and user_id:
-        context.user_data[CTX_USER_ID] = user_id
-    if CTX_LANG not in context.user_data and lang:
-        context.user_data[CTX_LANG] = lang
-        
-    clear_conversation_data(context)
-
-    try:
-        if is_admin(user_id):
-            await _show_menu_async(update, context, build_admin_menu)
-            return ConversationHandler.END
-        
-        # Check if user exists in database
-        client_info = db.find_client_by_user_id(user_id)
-        if client_info:
-            await _show_menu_async(update, context, build_client_menu)
-            return ConversationHandler.END
-        else:
-            # New user, ask for invitation code
-            await update.message.reply_text(
-                get_text(user_id, 'welcome_new_user', lang_override=lang),
-                parse_mode=ParseMode.HTML
-            )
-            return STATE_WAITING_FOR_CODE
-    except Exception as e:
-        log.error(f"Error in start_command: {e}", exc_info=True)
-        await update.message.reply_text(
-            get_text(user_id, 'error_generic', lang_override=lang),
-            parse_mode=ParseMode.HTML
-        )
-        return ConversationHandler.END
-
 async def admin_command(update: Update, context: CallbackContext) -> int:
     """Entry point for the /admin command."""
     user_id, lang = get_user_id_and_lang(update, context)
@@ -1920,322 +1960,50 @@ async def conversation_fallback(update: Update, context: CallbackContext) -> int
         clear_conversation_data(context)
         return ConversationHandler.END
 
-# --- Main Callback Router ---
-async def main_callback_handler(update: Update, context: CallbackContext) -> str | int | None:
+@async_handler
+async def main_callback_handler(update: Update, context: CallbackContext) -> int:
+    """Main callback query handler that routes to specific handlers based on prefix."""
     query = update.callback_query
-    user_id = query.from_user.id; data = query.data
-    log.info(f"Main CB Router: User {user_id}, Data '{data}'")
-    
-    _, lang = get_user_id_and_lang(update, context)
-    
-    next_state = ConversationHandler.END 
-    processed_by_sub_handler = False
+    if not query:
+        return ConversationHandler.END
+
+    data = query.data
+    user_id, lang = get_user_id_and_lang(update, context)
+    log.info(f"main_callback_handler: User {user_id}, Data {data}, Lang {lang}")
 
     try:
-        if data.startswith(CALLBACK_CLIENT_PREFIX): 
-            next_state = await handle_client_callback(update, context)
-            processed_by_sub_handler = True
-        elif data.startswith(CALLBACK_ADMIN_PREFIX): 
-            next_state = await handle_admin_callback(update, context)
-            processed_by_sub_handler = True
-        elif data.startswith(CALLBACK_FOLDER_PREFIX): 
-            next_state = await handle_folder_callback(update, context)
-            processed_by_sub_handler = True
-        elif data.startswith(CALLBACK_TASK_PREFIX): 
-            next_state = await handle_task_callback(update, context)
-            processed_by_sub_handler = True
-        elif data.startswith(CALLBACK_JOIN_PREFIX): 
-            next_state = await handle_join_callback(update, context)
-            processed_by_sub_handler = True
-        elif data.startswith(CALLBACK_LANG_PREFIX): 
-            next_state = await handle_language_callback(update, context)
-            processed_by_sub_handler = True
-        elif data.startswith(CALLBACK_INTERVAL_PREFIX): 
-            next_state = await handle_interval_callback(update, context)
-            processed_by_sub_handler = True
-        elif data.startswith(CALLBACK_GENERIC_PREFIX): 
-            next_state = await handle_generic_callback(update, context)
-            processed_by_sub_handler = True
-        else: 
-            if not query._answered: await query.answer(get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Unknown button."), show_alert=True)
-            log.warning(f"Unknown callback data pattern in main_callback_handler: {data}")
-            next_state = ConversationHandler.END
-        
-        if not processed_by_sub_handler and query and not query._answered:
-            try: await query.answer() 
-            except Exception: pass
-
-        log.debug(f"main_callback_handler returning state: {next_state}")
-        return next_state
-        
+        if data.startswith(CALLBACK_CLIENT_PREFIX):
+            return await handle_client_callback(update, context)
+        elif data.startswith(CALLBACK_ADMIN_PREFIX):
+            return await handle_admin_callback(update, context)
+        elif data.startswith(CALLBACK_FOLDER_PREFIX):
+            return await handle_folder_callback(update, context)
+        elif data.startswith(CALLBACK_TASK_PREFIX):
+            return await handle_task_callback(update, context)
+        elif data.startswith(CALLBACK_JOIN_PREFIX):
+            return await handle_join_callback(update, context)
+        elif data.startswith(CALLBACK_LANG_PREFIX):
+            return await handle_language_callback(update, context)
+        elif data.startswith(CALLBACK_INTERVAL_PREFIX):
+            return await handle_interval_callback(update, context)
+        elif data.startswith(CALLBACK_GENERIC_PREFIX):
+            return await handle_generic_callback(update, context)
+        else:
+            log.warning(f"Unhandled callback data: {data}")
+            if not query._answered:
+                await query.answer(
+                    get_text(user_id, 'error_invalid_action', lang_override=lang),
+                    show_alert=True
+                )
+            return ConversationHandler.END
     except Exception as e:
-        log.error(f"Error in main_callback_handler for data '{data}': {e}", exc_info=True)
-        if query and not query._answered:
-            try: await query.answer(get_text(user_id, 'error_generic', lang_override=lang), show_alert=True)
-            except Exception: pass
-        log.debug("main_callback_handler returning END due to exception")
+        log.error(f"Error in main_callback_handler: {e}", exc_info=True)
+        if not query._answered:
+            await query.answer(
+                get_text(user_id, 'error_generic', lang_override=lang),
+                show_alert=True
+            )
         return ConversationHandler.END
-
-# --- Callback Sub-handlers ---
-async def handle_client_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
-    client_info_row = db.find_client_by_user_id(user_id)
-    client_info = dict(client_info_row) if client_info_row else None
-    log.info(f"handle_client_callback: User {user_id}, Data {data}, Lang {lang}")
-
-    if not client_info or client_info.get('subscription_end', 0) < int(datetime.now(UTC_TZ).timestamp()): 
-        log.warning(f"Expired/Invalid client {user_id} tried client action: {data}")
-        if not query._answered: await query.answer(get_text(user_id, 'subscription_expired', lang_override=lang), show_alert=True)
-        clear_conversation_data(context)
-        return ConversationHandler.END
-
-    action = data.split(CALLBACK_CLIENT_PREFIX)[1].split('?')[0]; 
-    log.debug(f"Client CB Route: Action='{action}', Data='{data}'")
-    next_state: int | str | None = ConversationHandler.END
-
-    if action == "select_bot_task": 
-        if not query._answered: await query.answer()
-        next_state = await client_select_bot_generic(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP, 'task_select_userbot')
-    elif action == "manage_folders": 
-        if not query._answered: await query.answer()
-        await client_folder_menu(update, context); next_state = ConversationHandler.END
-    elif action == "select_bot_join": 
-        if not query._answered: await query.answer()
-        next_state = await client_select_bot_generic(update, context, CALLBACK_JOIN_PREFIX, STATE_WAITING_FOR_GROUP_LINKS, 'join_select_userbot')
-    elif action == "view_stats": 
-        next_state = await client_show_stats(update, context)
-    elif action == "language": 
-        if not query._answered: await query.answer()
-        next_state = await client_ask_select_language(update, context)
-    elif action == "back_to_menu": 
-        if not query._answered: await query.answer()
-        clear_conversation_data(context); 
-        await client_menu(update, context); next_state = ConversationHandler.END
-    else: 
-        log.warning(f"Unhandled CLIENT CB: Action='{action}', Data='{data}'"); 
-        if not query._answered: await query.answer(get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Action not recognized."), show_alert=True)
-        next_state = ConversationHandler.END
-    return next_state
-
-async def handle_admin_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
-    
-    if not is_admin(user_id): 
-        if not query._answered: await query.answer(get_text(user_id, 'unauthorized', lang_override=lang), show_alert=True)
-        return ConversationHandler.END
-
-    action_full = data.split(CALLBACK_ADMIN_PREFIX)[1]; action_main = action_full.split('?')[0]; 
-    log.info(f"handle_admin_callback: User {user_id}, ActionFull '{action_full}', ActionMain '{action_main}'")
-    next_state: int | str | None = ConversationHandler.END
-
-    if action_main == "back_to_menu": 
-        if not query._answered: await query.answer()
-        await admin_command(update, context); 
-        next_state = ConversationHandler.END
-    elif action_main == "add_bot_prompt": 
-        if not query._answered: await query.answer()
-        await send_or_edit_message(update, context, get_text(user_id, 'admin_userbot_prompt_phone', lang_override=lang))
-        next_state = STATE_WAITING_FOR_PHONE
-    elif action_main == "remove_bot_select": 
-        next_state = await admin_select_userbot_to_remove(update, context)
-    elif action_main.startswith("remove_bot_confirm_prompt_"): 
-        next_state = await admin_confirm_remove_userbot_prompt(update, context)
-    elif action_main.startswith("remove_bot_confirmed_execute_"): 
-        next_state = await admin_remove_userbot_confirmed_execute(update, context)
-    elif action_main == "list_bots": 
-        next_state = await admin_list_userbots(update, context)
-    elif action_main == "gen_invite_prompt": 
-        if not query._answered: await query.answer()
-        await send_or_edit_message(update, context, get_text(user_id, 'admin_invite_prompt_details', lang_override=lang))
-        next_state = STATE_WAITING_FOR_SUB_DETAILS
-    elif action_main == "view_subs": 
-        next_state = await admin_view_subscriptions(update, context)
-    elif action_main == "extend_sub_prompt": 
-        if not query._answered: await query.answer()
-        await send_or_edit_message(update, context, get_text(user_id, 'admin_extend_prompt_code', lang_override=lang))
-        next_state = STATE_WAITING_FOR_EXTEND_CODE
-    elif action_main == "assign_bots_prompt": 
-        if not query._answered: await query.answer()
-        await send_or_edit_message(update, context, get_text(user_id, 'admin_assignbots_prompt_code', lang_override=lang))
-        next_state = STATE_WAITING_FOR_ADD_USERBOTS_CODE
-    elif action_main == "view_logs": 
-        next_state = await admin_view_system_logs(update, context)
-    elif action_main == "manage_tasks": 
-        next_state = await admin_task_menu(update, context)
-    elif action_main == "view_tasks": 
-        next_state = await admin_view_tasks(update, context)
-    elif action_main == "create_task": 
-        next_state = await admin_create_task_start(update, context)
-    elif action_main.startswith("task_bot_"): 
-        if not query._answered: await query.answer()
-        context.user_data[CTX_TASK_BOT] = action_main.replace("task_bot_", "")
-        await send_or_edit_message(update, context, get_text(user_id, 'admin_task_enter_message', lang_override=lang))
-        next_state = STATE_ADMIN_TASK_MESSAGE
-    elif action_main.startswith("task_options_"): 
-        next_state = await admin_task_options(update, context)
-    elif action_main.startswith("toggle_task_status_"): 
-        next_state = await admin_toggle_task_status(update, context)
-    elif action_main.startswith("delete_task_confirm_"): 
-        next_state = await admin_delete_task_confirm(update, context)
-    elif action_main.startswith("delete_task_execute_"): 
-        next_state = await admin_delete_task_execute(update, context)
-    else: 
-        if not query._answered: await query.answer(get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Admin action not recognized."), show_alert=True)
-        next_state = ConversationHandler.END
-    return next_state
-
-async def handle_folder_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
-    action = data.split(CALLBACK_FOLDER_PREFIX)[1].split('?')[0]; 
-    log.info(f"handle_folder_callback: User {user_id}, Data {data}, Action {action}, Lang {lang}")
-    next_state: int | str | None = ConversationHandler.END
-
-    if action == "create_prompt": 
-        if not query._answered: await query.answer()
-        await send_or_edit_message(update, context, get_text(user_id, 'folder_create_prompt', lang_override=lang))
-        next_state = STATE_WAITING_FOR_FOLDER_NAME
-    elif action == "select_edit": 
-        next_state = await client_select_folder_to_edit_or_delete(update, context, 'edit')
-    elif action == "select_delete": 
-        next_state = await client_select_folder_to_edit_or_delete(update, context, 'delete')
-    elif action == "edit_selected": 
-        next_state = await client_show_folder_edit_options(update, context)
-    elif action == "delete_selected_prompt": 
-        next_state = await client_confirm_folder_delete_prompt(update, context)
-    elif action == "delete_confirmed_execute": 
-        next_state = await client_delete_folder_confirmed_execute(update, context)
-    elif action == "back_to_manage": 
-        if not query._answered: await query.answer()
-        clear_conversation_data(context); 
-        await client_folder_menu(update, context)
-        next_state = ConversationHandler.END
-    elif action == "edit_add_prompt": 
-        if not query._answered: await query.answer()
-        folder_name = context.user_data.get(CTX_FOLDER_NAME, get_text(user_id, "this_folder", lang_override=lang, default_text="this folder"))
-        await send_or_edit_message(update, context, get_text(user_id, 'folder_edit_add_prompt', lang_override=lang, name=html.escape(folder_name)))
-        next_state = STATE_WAITING_FOR_GROUP_LINKS # This state will use process_folder_links
-    elif action == "edit_remove_select": 
-        next_state = await client_select_groups_to_remove(update, context)
-    elif action == "edit_toggle_remove": 
-        next_state = await client_toggle_group_for_removal(update, context)
-    elif action == "edit_remove_confirm": 
-        next_state = await client_confirm_remove_selected_groups(update, context)
-    elif action == "edit_rename_prompt": 
-        if not query._answered: await query.answer()
-        current_name = context.user_data.get(CTX_FOLDER_NAME, get_text(user_id, "this_folder", lang_override=lang, default_text="this folder"))
-        await send_or_edit_message(update, context, get_text(user_id, 'folder_edit_rename_prompt', lang_override=lang, current_name=html.escape(current_name)))
-        next_state = STATE_FOLDER_RENAME_PROMPT
-    elif action == "back_to_edit_options": 
-        if not query._answered: await query.answer()
-        context.user_data.pop(CTX_TARGET_GROUP_IDS_TO_REMOVE, None); 
-        next_state = await client_show_folder_edit_options(update, context)
-    else: 
-        log.warning(f"Unhandled FOLDER CB: Action='{action}', Data='{data}'"); 
-        if not query._answered: await query.answer(get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Folder action not recognized."), show_alert=True)
-        next_state = ConversationHandler.END
-    return next_state
-
-async def handle_task_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
-    action = data.split(CALLBACK_TASK_PREFIX)[1].split('?')[0]; 
-    log.info(f"handle_task_callback: User {user_id}, Data {data}, Action {action}, Lang {lang}")
-    next_state: int | str | None = STATE_TASK_SETUP
-
-    if action.startswith("select_"): 
-        next_state = await handle_userbot_selection_callback(update, context, CALLBACK_TASK_PREFIX)
-    elif action == "back_to_bot_select": 
-        if not query._answered: await query.answer()
-        clear_conversation_data(context); 
-        next_state = await client_select_bot_generic(update, context, CALLBACK_TASK_PREFIX, STATE_TASK_SETUP, 'task_select_userbot')
-    elif action == "back_to_task_menu": 
-        next_state = await task_show_settings_menu(update, context)
-    elif action == "set_primary_link": 
-        next_state = await task_prompt_set_link(update, context, 'primary')
-    elif action == "set_time": 
-        next_state = await task_prompt_start_time(update, context)
-    elif action == "set_interval": 
-        next_state = await task_select_interval(update, context)
-    elif action == "set_target_type": 
-        next_state = await task_select_target_type(update, context)
-    elif action == "select_folder_target": 
-        next_state = await task_select_folder_for_target(update, context)
-    elif action == "set_target_all": 
-        next_state = await task_set_target(update, context, 'all')
-    elif action == "set_target_folder": 
-        next_state = await task_set_target(update, context, 'folder')
-    elif action == "back_to_target_type": 
-        next_state = await task_select_target_type(update, context)
-    elif action == "toggle_status": 
-        next_state = await task_toggle_status(update, context)
-    elif action == "save": 
-        next_state = await task_save_settings(update, context)
-    else: 
-        log.warning(f"Unhandled TASK CB: Action='{action}', Data='{data}'"); 
-        if not query._answered: await query.answer(get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Task action not recognized."), show_alert=True)
-        next_state = ConversationHandler.END
-    return next_state
-
-async def handle_join_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query; user_id, lang = get_user_id_and_lang(update, context); data = query.data
-    log.info(f"handle_join_callback: User {user_id}, Data {data}, Lang {lang}")
-    next_state: int | str | None = ConversationHandler.END
-
-    if data.startswith(CALLBACK_JOIN_PREFIX + "select_"): 
-        next_state = await handle_userbot_selection_callback(update, context, CALLBACK_JOIN_PREFIX)
-    else: 
-        log.warning(f"Unhandled JOIN CB: Data='{data}'"); 
-        if not query._answered: await query.answer(get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Join action not recognized."), show_alert=True)
-        next_state = ConversationHandler.END
-    return next_state
-
-async def handle_language_callback(update: Update, context: CallbackContext) -> str | int | None:
-     query = update.callback_query; user_id, lang = get_user_id_and_lang(update,context); data = query.data
-     log.info(f"handle_language_callback: User {user_id}, Data {data}, Lang {lang}")
-     next_state: int | str | None = ConversationHandler.END
-
-     if data.startswith(CALLBACK_LANG_PREFIX): 
-         next_state = await set_language_handler(update, context)
-     else: 
-         log.warning(f"Unhandled LANG CB: Data='{data}'"); 
-         if not query._answered: await query.answer(get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Language action not recognized."), show_alert=True)
-         next_state = ConversationHandler.END
-     return next_state
-
-async def handle_interval_callback(update: Update, context: CallbackContext) -> str | int | None:
-     query = update.callback_query; user_id, lang = get_user_id_and_lang(update,context); data = query.data
-     log.info(f"handle_interval_callback: User {user_id}, Data {data}, Lang {lang}")
-     next_state: int | str | None = STATE_TASK_SETUP
-
-     if data.startswith(CALLBACK_INTERVAL_PREFIX): 
-         next_state = await process_interval_callback(update, context) 
-     else: 
-         log.warning(f"Unhandled INTERVAL CB: Data='{data}'"); 
-         if not query._answered: await query.answer(get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Interval action not recognized."), show_alert=True)
-         next_state = ConversationHandler.END
-     return next_state
-
-async def handle_generic_callback(update: Update, context: CallbackContext) -> str | int | None:
-    query = update.callback_query
-    user_id, lang = get_user_id_and_lang(update, context); data = query.data
-    action = data.split(CALLBACK_GENERIC_PREFIX)[1] if CALLBACK_GENERIC_PREFIX in data else "unknown"
-    log.info(f"handle_generic_callback: User {user_id}, Data {data}, Action {action}, Lang {lang}")
-    next_state: int | str | None = ConversationHandler.END
-
-    if action == "cancel" or action == "confirm_no":
-        if not query._answered: await query.answer()
-        await send_or_edit_message(update, context, get_text(user_id, 'cancelled', lang_override=lang), reply_markup=None)
-        clear_conversation_data(context); 
-        next_state = ConversationHandler.END
-    elif action == "noop": 
-        if not query._answered: await query.answer()
-        next_state = None
-    else: 
-        log.warning(f"Unhandled GENERIC CB: Action='{action}', Data='{data}'"); 
-        if not query._answered: await query.answer()
-        await send_or_edit_message(update,context,get_text(user_id, 'error_invalid_action', lang_override=lang, default_text="Generic action not recognized.")); 
-        next_state = ConversationHandler.END
-    return next_state
-
 
 # --- Conversation Handler Definition ---
 # THIS MUST BE AT THE END OF THE FILE, AFTER ALL HANDLER FUNCTIONS ARE DEFINED
