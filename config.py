@@ -266,8 +266,9 @@ except pytz.UnknownTimeZoneError as e:
     STATE_WAITING_FOR_TASK_MESSAGE,
     STATE_WAITING_FOR_TASK_SCHEDULE,
     STATE_WAITING_FOR_TASK_TARGET,
-    STATE_ADMIN_TASK_CONFIRM
-) = map(str, range(35))
+    STATE_ADMIN_TASK_CONFIRM,
+    STATE_WAITING_FOR_ADMIN_COMMAND  # Add this state to match the expected count
+) = map(str, range(36))  # Update range to 36 to match the number of states
 
 # --- Conversation Context Keys ---
 CTX_USER_ID = "_user_id"; CTX_LANG = "_lang"; CTX_PHONE = "phone"; CTX_API_ID = "api_id"
@@ -347,12 +348,5 @@ def build_admin_menu(user_id: int, context: 'CallbackContext'):
     return InlineKeyboardMarkup(keyboard)
 
 log.info("Configuration loaded successfully.")
-
-# State definitions for conversation
-STATE_WAITING_FOR_COMMAND = 'WAITING_FOR_COMMAND'
-STATE_WAITING_FOR_ADMIN_COMMAND = 'WAITING_FOR_ADMIN_COMMAND'
-
-# Admin IDs list
-ADMIN_IDS = [7054186974]  # Replace with your actual admin IDs
 
 # --- END OF FILE config.py ---
