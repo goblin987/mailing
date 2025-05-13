@@ -48,14 +48,21 @@ def shutdown(signum, frame):
     if updater:
         log.info("Stopping PTB Updater polling...")
         # Stop accepting new updates and shut down the dispatcher queues.
-        updater.stop()
+        if updater.running: # PTB v13 check
+            updater.stop()
+        
         # Wait for the polling thread to finish. Accessing _thread is internal,
         # but often necessary for a clean exit in PTB v13.
         if hasattr(updater, 'job_queue') and updater.job_queue:
              updater.job_queue.stop() # Stop job queue if exists
+        
+        # For PTB v13, the dispatcher has a `shutdown` method that can be awaited if in async context,
+        # or called if in sync. Since shutdown handler is sync, direct call is okay.
+        # However, `updater.stop()` should handle dispatcher shutdown too.
+        # The `updater._thread` join is a common pattern for v13.
         if hasattr(updater, '_thread') and updater._thread and updater._thread.is_alive():
              log.info("Waiting for updater thread to finish...")
-             updater._thread.join(timeout=5)
+             updater._thread.join(timeout=10) # Increased timeout
              if updater._thread.is_alive():
                   log.warning("Updater thread did not exit gracefully.")
 
@@ -69,10 +76,11 @@ def shutdown(signum, frame):
 
     log.info("Shutdown complete. Exiting.")
     # Force exit if threads are hanging
+    # sys.exit(0) # Prefer sys.exit for cleaner exit if possible
     os._exit(0) # Use os._exit for a more forceful exit if clean sys.exit fails
 
 # --- Main Function ---
-async def main():
+async def main(): # main is already async, good
     """Main function to initialize and start the bot."""
     global updater, checker_thread, checker_loop # Make variables accessible to shutdown handler
 
@@ -84,7 +92,7 @@ async def main():
     # --- Initialize PTB ---
     log.info("Initializing PTB Updater...")
     try:
-        # Disable persistence for diagnostics
+        # Disable persistence for diagnostics (as per your current config)
         # persistence_path = os.path.join(DATA_DIR, 'bot_persistence.pickle')
         # log.info(f"Using persistence file: {persistence_path}")
         # persistence = PicklePersistence(filename=persistence_path)
@@ -101,26 +109,22 @@ async def main():
     # --- Register Handlers ---
     log.info("Registering handlers...")
 
-    # /start and /admin commands are now entry points to main_conversation
-    # dp.add_handler(CommandHandler('start', handlers.start_command)) # REMOVED
-    # dp.add_handler(CommandHandler('admin', handlers.admin_command)) # REMOVED
-    # log.info("/start and /admin commands registered directly.") # REMOVED/MODIFIED LOG
-
     if handlers.main_conversation:
         dp.add_handler(handlers.main_conversation)
-        log.info("Main conversation handler (including /start and /admin entry points) registered.") # MODIFIED LOG
+        log.info("Main conversation handler (including async /start and /admin entry points) registered.")
     else:
         log.critical("CRITICAL: Main conversation handler not found in handlers module!")
         sys.exit(1)
 
-    # Register the new synchronous error handler
-    dp.add_error_handler(handlers.sync_error_handler)
-    log.info("Synchronous error handler registered.")
-    # if handlers.async_error_handler: # Keep the old registration commented out
-    #     dp.add_error_handler(handlers.async_error_handler)
-    #     log.info("Async error handler registered.")
-    # else:
-    #     log.warning("Async error handler not found in handlers module!")
+    # Register the ASYNC error handler
+    if hasattr(handlers, 'async_error_handler'):
+        dp.add_error_handler(handlers.async_error_handler)
+        log.info("Async error handler registered.")
+    else:
+        log.warning("Async error handler not found in handlers.py! Errors might not be reported to user.")
+        # Fallback to a simple lambda if async_error_handler is missing
+        dp.add_error_handler(lambda u, c: log.error("Generic unhandled error:", exc_info=c.error))
+
 
     log.info("Handlers registered successfully.")
 
@@ -142,7 +146,13 @@ async def main():
         def run_checker_in_loop():
             asyncio.set_event_loop(checker_loop)
             try:
-                checker_loop.run_until_complete(telethon_api.run_check_tasks_periodically())
+                # Ensure run_check_tasks_periodically is awaited if it's an async generator or coroutine
+                if asyncio.iscoroutinefunction(telethon_api.run_check_tasks_periodically) or \
+                   asyncio.iscoroutine(telethon_api.run_check_tasks_periodically): # Check if it's a coroutine
+                    checker_loop.run_until_complete(telethon_api.run_check_tasks_periodically())
+                else: # If it's a sync function that runs its own loop (less ideal)
+                    telethon_api.run_check_tasks_periodically() 
+
             except asyncio.CancelledError:
                  log.info("Background task checker loop cancelled.")
             except Exception as task_e:
@@ -152,12 +162,20 @@ async def main():
                       log.info("Closing background task checker event loop.")
                       # Additional cleanup before closing
                       try:
-                           loop_tasks = asyncio.all_tasks(loop=checker_loop)
-                           for task in loop_tasks:
-                               if not task.done(): task.cancel()
-                           # Wait briefly for tasks to cancel
-                           checker_loop.run_until_complete(asyncio.gather(*loop_tasks, return_exceptions=True))
-                           checker_loop.run_until_complete(checker_loop.shutdown_asyncgens())
+                           all_tasks = asyncio.all_tasks(loop=checker_loop)
+                           # Filter out the current task if run_until_complete is used for a single coroutine
+                           # current_task = asyncio.current_task(loop=checker_loop) # May not be reliable here
+                           # tasks_to_cancel = [t for t in all_tasks if t is not current_task]
+                           tasks_to_cancel = [t for t in all_tasks if not t.done()]
+
+                           if tasks_to_cancel:
+                               for task in tasks_to_cancel:
+                                   task.cancel()
+                               # Wait briefly for tasks to cancel
+                               checker_loop.run_until_complete(asyncio.gather(*tasks_to_cancel, return_exceptions=True))
+                           
+                           if hasattr(checker_loop, 'shutdown_asyncgens'): # Python 3.6+
+                               checker_loop.run_until_complete(checker_loop.shutdown_asyncgens())
                       except Exception as close_err:
                            log.error(f"Error during checker loop final cleanup: {close_err}")
                       finally:
@@ -192,7 +210,17 @@ async def main():
     log.info("Press Ctrl+C or send SIGTERM to stop.")
 
     # Keep the main thread alive until a shutdown signal is received
-    updater.idle()
+    # This will block until updater.stop() is called or a signal is received that calls it.
+    try:
+        updater.idle()
+    except KeyboardInterrupt: # Handle Ctrl+C if not caught by signal handler (e.g. Windows)
+        log.info("KeyboardInterrupt received, initiating shutdown...")
+        if not _shutdown_in_progress:
+            shutdown(signal.SIGINT, None)
+    except Exception as e:
+        log.error(f"Updater.idle() exited with an exception: {e}", exc_info=True)
+        if not _shutdown_in_progress:
+            shutdown(0,None) # Generic signal
 
     # --- Cleanup (after idle() stops, usually via shutdown signal) ---
     log.info("Bot polling loop exited.")
