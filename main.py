@@ -80,26 +80,20 @@ def shutdown(signum, frame):
     os._exit(0) # Use os._exit for a more forceful exit if clean sys.exit fails
 
 # --- Main Function ---
-async def main(): # main is already async, good
+async def main():
     """Main function to initialize and start the bot."""
-    global updater, checker_thread, checker_loop # Make variables accessible to shutdown handler
+    global updater, checker_thread, checker_loop
 
     log.info("--- Starting Telegram Bot ---")
     if not ADMIN_IDS:
-         log.critical("CRITICAL: No valid ADMIN_IDS configured in environment variables. Bot may not function correctly. Exiting.")
-         sys.exit(1)
+        log.critical("CRITICAL: No valid ADMIN_IDS configured in environment variables. Bot may not function correctly. Exiting.")
+        sys.exit(1)
 
     # --- Initialize PTB ---
     log.info("Initializing PTB Updater...")
     try:
-        # Disable persistence for diagnostics (as per your current config)
-        # persistence_path = os.path.join(DATA_DIR, 'bot_persistence.pickle')
-        # log.info(f"Using persistence file: {persistence_path}")
-        # persistence = PicklePersistence(filename=persistence_path)
-        
-        updater = Updater(token=BOT_TOKEN, use_context=True, persistence=None) # Set persistence=None
+        updater = Updater(token=BOT_TOKEN, use_context=True, persistence=None)
         log.info("PTB Updater initialized WITHOUT persistence.")
-            
     except Exception as e:
         log.critical(f"CRITICAL: Failed to initialize PTB Updater: {e}", exc_info=True)
         sys.exit(1)
@@ -111,97 +105,61 @@ async def main(): # main is already async, good
 
     if handlers.main_conversation:
         dp.add_handler(handlers.main_conversation)
-        log.info("Main conversation handler (including async /start and /admin entry points) registered.")
+        log.info("Main conversation handler registered.")
     else:
         log.critical("CRITICAL: Main conversation handler not found in handlers module!")
         sys.exit(1)
 
-    # Register the ASYNC error handler
-    if hasattr(handlers, 'async_error_handler'):
-        dp.add_error_handler(handlers.async_error_handler)
-        log.info("Async error handler registered.")
-    else:
-        log.warning("Async error handler not found in handlers.py! Errors might not be reported to user.")
-        # Fallback to a simple lambda if async_error_handler is missing
-        dp.add_error_handler(lambda u, c: log.error("Generic unhandled error:", exc_info=c.error))
-
-
-    log.info("Handlers registered successfully.")
+    # Register the error handler
+    dp.add_error_handler(handlers.async_error_handler)
+    log.info("Error handler registered.")
 
     # --- Initialize Telethon Userbots ---
     log.info("Initializing Telethon userbot runtimes...")
     try:
-        # This function now attempts to start runtimes for all non-inactive bots in DB
         await telethon_api.initialize_all_userbots()
         log.info("Telethon userbot initialization process requested.")
     except Exception as e:
-        # Log error but continue running - bot might function partially without all userbots
         log.error(f"Error during initial userbot runtime initialization request: {e}", exc_info=True)
 
     # --- Start Background Task Checker ---
     log.info("Starting Telethon background task checker thread...")
     try:
-        # Create and store the event loop for the checker thread
         checker_loop = asyncio.new_event_loop()
         def run_checker_in_loop():
             asyncio.set_event_loop(checker_loop)
             try:
-                # Ensure run_check_tasks_periodically is awaited if it's an async generator or coroutine
-                if asyncio.iscoroutinefunction(telethon_api.run_check_tasks_periodically) or \
-                   asyncio.iscoroutine(telethon_api.run_check_tasks_periodically): # Check if it's a coroutine
+                if asyncio.iscoroutinefunction(telethon_api.run_check_tasks_periodically):
                     checker_loop.run_until_complete(telethon_api.run_check_tasks_periodically())
-                else: # If it's a sync function that runs its own loop (less ideal)
-                    telethon_api.run_check_tasks_periodically() 
-
+                else:
+                    telethon_api.run_check_tasks_periodically()
             except asyncio.CancelledError:
-                 log.info("Background task checker loop cancelled.")
+                log.info("Background task checker loop cancelled.")
             except Exception as task_e:
-                 log.critical(f"CRITICAL: Background task checker loop crashed: {task_e}", exc_info=True)
+                log.critical(f"CRITICAL: Background task checker loop crashed: {task_e}", exc_info=True)
             finally:
-                 if not checker_loop.is_closed():
-                      log.info("Closing background task checker event loop.")
-                      # Additional cleanup before closing
-                      try:
-                           all_tasks = asyncio.all_tasks(loop=checker_loop)
-                           # Filter out the current task if run_until_complete is used for a single coroutine
-                           # current_task = asyncio.current_task(loop=checker_loop) # May not be reliable here
-                           # tasks_to_cancel = [t for t in all_tasks if t is not current_task]
-                           tasks_to_cancel = [t for t in all_tasks if not t.done()]
+                if not checker_loop.is_closed():
+                    checker_loop.close()
+                    log.info("Checker loop closed.")
 
-                           if tasks_to_cancel:
-                               for task in tasks_to_cancel:
-                                   task.cancel()
-                               # Wait briefly for tasks to cancel
-                               checker_loop.run_until_complete(asyncio.gather(*tasks_to_cancel, return_exceptions=True))
-                           
-                           if hasattr(checker_loop, 'shutdown_asyncgens'): # Python 3.6+
-                               checker_loop.run_until_complete(checker_loop.shutdown_asyncgens())
-                      except Exception as close_err:
-                           log.error(f"Error during checker loop final cleanup: {close_err}")
-                      finally:
-                            checker_loop.close()
-                      log.info("Checker loop closed.")
-
-        # Start the checker function in a separate daemon thread
         checker_thread = threading.Thread(target=run_checker_in_loop, name="TaskCheckerThread", daemon=True)
         checker_thread.start()
         log.info("Telethon background task checker thread started.")
     except Exception as e:
         log.critical(f"CRITICAL: Failed to start background task checker thread: {e}", exc_info=True)
-        # Don't exit, but log critically. Bot may run without background tasks.
 
     # --- Register Signal Handlers ---
-    log.info("Registering shutdown signal handlers (SIGTERM, SIGINT)...")
+    log.info("Registering shutdown signal handlers...")
     try:
-        signal.signal(signal.SIGTERM, shutdown) # Standard signal for termination
-        signal.signal(signal.SIGINT, shutdown)  # Signal for Ctrl+C
+        signal.signal(signal.SIGTERM, shutdown)
+        signal.signal(signal.SIGINT, shutdown)
         log.info("Signal handlers registered.")
     except ValueError as e:
-         # This can happen on Windows if trying to register SIGTERM outside main thread
-         log.warning(f"Could not register all signal handlers (maybe running on Windows?): {e}")
-         # Try registering only SIGINT on Windows if possible
-         try: signal.signal(signal.SIGINT, shutdown)
-         except Exception: pass
+        log.warning(f"Could not register all signal handlers: {e}")
+        try:
+            signal.signal(signal.SIGINT, shutdown)
+        except Exception:
+            pass
 
     # --- Start Polling ---
     log.info("Starting PTB polling...")
@@ -209,28 +167,29 @@ async def main(): # main is already async, good
     log.info("--- Bot is now running ---")
     log.info("Press Ctrl+C or send SIGTERM to stop.")
 
-    # Keep the main thread alive until a shutdown signal is received
-    # This will block until updater.stop() is called or a signal is received that calls it.
     try:
-        updater.idle()
-    except KeyboardInterrupt: # Handle Ctrl+C if not caught by signal handler (e.g. Windows)
-        log.info("KeyboardInterrupt received, initiating shutdown...")
+        await asyncio.get_event_loop().create_future()  # Keep the event loop running
+    except asyncio.CancelledError:
+        pass
+    except KeyboardInterrupt:
         if not _shutdown_in_progress:
             shutdown(signal.SIGINT, None)
     except Exception as e:
-        log.error(f"Updater.idle() exited with an exception: {e}", exc_info=True)
+        log.error(f"Main loop exited with an exception: {e}", exc_info=True)
         if not _shutdown_in_progress:
-            shutdown(0,None) # Generic signal
+            shutdown(0, None)
 
-    # --- Cleanup (after idle() stops, usually via shutdown signal) ---
     log.info("Bot polling loop exited.")
-    # Ensure shutdown logic runs even if idle() exits unexpectedly
     if not _shutdown_in_progress:
-         log.warning("Updater exited unexpectedly without a shutdown signal. Initiating manual cleanup...")
-         shutdown(0, None) # Manual shutdown call
-
+        log.warning("Bot exited unexpectedly. Initiating manual cleanup...")
+        shutdown(0, None)
 
 if __name__ == "__main__":
-    # Run the async main function
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("Received keyboard interrupt, shutting down...")
+    except Exception as e:
+        log.critical(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
 # --- END OF FILE main.py ---
