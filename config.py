@@ -265,8 +265,9 @@ except pytz.UnknownTimeZoneError as e:
     STATE_WAITING_FOR_TASK_MESSAGE,
     STATE_WAITING_FOR_TASK_SCHEDULE,
     STATE_WAITING_FOR_TASK_TARGET,
-    STATE_ADMIN_TASK_CONFIRM
-) = map(str, range(34))
+    STATE_ADMIN_TASK_CONFIRM,
+    STATE_WAITING_FOR_ADMIN_COMMAND
+) = map(str, range(35))
 
 # --- Conversation Context Keys ---
 CTX_USER_ID = "_user_id"; CTX_LANG = "_lang"; CTX_PHONE = "phone"; CTX_API_ID = "api_id"
