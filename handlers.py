@@ -94,68 +94,41 @@ def async_handler(func: Callable) -> Callable:
 
 @async_handler
 async def start_command(update: Update, context: CallbackContext) -> int:
-    """Entry point for the /start command."""
-    log.debug("Async start_command called.")
-    user_id, lang = get_user_id_and_lang(update, context)
+    """Start command handler."""
+    user_id = update.effective_user.id
     
-    if CTX_USER_ID not in context.user_data and user_id:
-        context.user_data[CTX_USER_ID] = user_id
-    if CTX_LANG not in context.user_data and lang:
-        context.user_data[CTX_LANG] = lang
-        
-    clear_conversation_data(context)
-
-    try:
-        # Check if user is admin first
-        if is_admin(user_id):
-            log.info(f"Admin user {user_id} started the bot")
-            await update.message.reply_text(
-                get_text(user_id, 'welcome_admin', lang_override=lang),
-                parse_mode=ParseMode.HTML
-            )
-            await _show_menu_async(update, context, build_admin_menu)
-            return STATE_WAITING_FOR_ADMIN_COMMAND
-        
-        # Check if user exists in database
-        client_info = db.find_client_by_user_id(user_id)
-        if client_info:
-            # Existing client
-            log.info(f"Existing client {user_id} started the bot")
-            await update.message.reply_text(
-                get_text(user_id, 'welcome_back', lang_override=lang),
-                parse_mode=ParseMode.HTML
-            )
-            await _show_menu_async(update, context, build_client_menu)
-            return STATE_WAITING_FOR_CODE
-        else:
-            # New user
-            log.info(f"New user {user_id} started the bot")
-            await update.message.reply_text(
-                get_text(user_id, 'welcome_new_user', lang_override=lang),
-                parse_mode=ParseMode.HTML
-            )
-            return STATE_WAITING_FOR_CODE
-    except Exception as e:
-        log.error(f"Error in start_command for user {user_id}: {e}", exc_info=True)
-        await update.message.reply_text(
-            get_text(user_id, 'error_generic', lang_override=lang),
-            parse_mode=ParseMode.HTML
-        )
-        return ConversationHandler.END
+    # Check if user exists in database, if not, create new user
+    user = await get_user(user_id)
+    if not user:
+        await create_user(user_id, update.effective_user.username or "")
+    
+    # Get user's language
+    lang = await get_user_language(user_id) or 'en'
+    
+    # Send welcome message
+    welcome_text = get_text('welcome_message', lang)
+    await update.message.reply_text(welcome_text)
+    
+    # Return to waiting for command state
+    return STATE_WAITING_FOR_COMMAND
 
 @async_handler
 async def admin_command(update: Update, context: CallbackContext) -> int:
-    """Entry point for the /admin command."""
-    user_id, lang = get_user_id_and_lang(update, context)
+    """Admin command handler."""
+    user_id = update.effective_user.id
     
-    if not is_admin(user_id):
-        await update.message.reply_text(
-            get_text(user_id, 'error_not_admin', lang_override=lang),
-            parse_mode=ParseMode.HTML
-        )
-        return ConversationHandler.END
+    # Check if user is admin
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text(get_text('not_admin', await get_user_language(user_id)))
+        return STATE_WAITING_FOR_COMMAND
+        
+    # Build and send admin menu
+    reply_markup = build_admin_menu(user_id, context)
+    await update.message.reply_text(
+        get_text('admin_menu', await get_user_language(user_id)),
+        reply_markup=reply_markup
+    )
     
-    await _show_menu_async(update, context, build_admin_menu)
     return STATE_WAITING_FOR_ADMIN_COMMAND
 
 @async_handler
@@ -2044,48 +2017,51 @@ async def conversation_fallback(update: Update, context: CallbackContext) -> int
 
 @async_handler
 async def main_callback_handler(update: Update, context: CallbackContext) -> int:
-    """Main callback query handler that routes to specific handlers based on prefix."""
+    """Handle callback queries from inline keyboards."""
     query = update.callback_query
-    if not query:
-        return ConversationHandler.END
+    user_id = update.effective_user.id
+    
+    # Always answer the callback query to remove the loading state
+    await query.answer()
+    
+    if not query.data:
+        return STATE_WAITING_FOR_COMMAND
+        
+    if user_id not in ADMIN_IDS:
+        await query.message.reply_text(get_text('not_admin', await get_user_language(user_id)))
+        return STATE_WAITING_FOR_COMMAND
+        
+    # Handle different admin menu options
+    if query.data == 'admin_users':
+        await query.message.reply_text("User management feature coming soon!")
+    elif query.data == 'admin_settings':
+        await query.message.reply_text("Settings feature coming soon!")
+    elif query.data == 'admin_stats':
+        await query.message.reply_text("Statistics feature coming soon!")
+        
+    return STATE_WAITING_FOR_ADMIN_COMMAND
 
-    data = query.data
-    user_id, lang = get_user_id_and_lang(update, context)
-    log.info(f"main_callback_handler: User {user_id}, Data {data}, Lang {lang}")
+@async_handler
+async def process_admin_command(update: Update, context: CallbackContext) -> int:
+    """Process text messages in admin mode."""
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text(get_text('not_admin', await get_user_language(user_id)))
+        return STATE_WAITING_FOR_COMMAND
+        
+    # Handle admin text commands here
+    await update.message.reply_text("Please use the admin menu buttons.")
+    return STATE_WAITING_FOR_ADMIN_COMMAND
 
-    try:
-        if data.startswith(CALLBACK_CLIENT_PREFIX):
-            return await handle_client_callback(update, context)
-        elif data.startswith(CALLBACK_ADMIN_PREFIX):
-            return await handle_admin_callback(update, context)
-        elif data.startswith(CALLBACK_FOLDER_PREFIX):
-            return await handle_folder_callback(update, context)
-        elif data.startswith(CALLBACK_TASK_PREFIX):
-            return await handle_task_callback(update, context)
-        elif data.startswith(CALLBACK_JOIN_PREFIX):
-            return await handle_join_callback(update, context)
-        elif data.startswith(CALLBACK_LANG_PREFIX):
-            return await handle_language_callback(update, context)
-        elif data.startswith(CALLBACK_INTERVAL_PREFIX):
-            return await handle_interval_callback(update, context)
-        elif data.startswith(CALLBACK_GENERIC_PREFIX):
-            return await handle_generic_callback(update, context)
-        else:
-            log.warning(f"Unhandled callback data: {data}")
-            if not query._answered:
-                await query.answer(
-                    get_text(user_id, 'error_invalid_action', lang_override=lang),
-                    show_alert=True
-                )
-            return ConversationHandler.END
-    except Exception as e:
-        log.error(f"Error in main_callback_handler: {e}", exc_info=True)
-        if not query._answered:
-            await query.answer(
-                get_text(user_id, 'error_generic', lang_override=lang),
-                show_alert=True
-            )
-        return ConversationHandler.END
+@async_handler
+async def conversation_fallback(update: Update, context: CallbackContext) -> int:
+    """Fallback handler for unknown commands/messages."""
+    user_id = update.effective_user.id
+    lang = await get_user_language(user_id)
+    
+    await update.message.reply_text(get_text('unknown_command', lang))
+    return STATE_WAITING_FOR_COMMAND
 
 # --- Conversation Handler Definition ---
 # THIS MUST BE AT THE END OF THE FILE, AFTER ALL HANDLER FUNCTIONS ARE DEFINED
