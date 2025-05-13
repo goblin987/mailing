@@ -238,6 +238,7 @@ except pytz.UnknownTimeZoneError as e:
 
 # --- Conversation States ---
 (
+    STATE_WAITING_FOR_COMMAND, STATE_WAITING_FOR_ADMIN_COMMAND,
     STATE_WAITING_FOR_CODE, STATE_WAITING_FOR_PHONE, STATE_WAITING_FOR_API_ID,
     STATE_WAITING_FOR_API_HASH, STATE_WAITING_FOR_CODE_USERBOT,
     STATE_WAITING_FOR_PASSWORD, STATE_WAITING_FOR_SUB_DETAILS,
@@ -265,8 +266,7 @@ except pytz.UnknownTimeZoneError as e:
     STATE_WAITING_FOR_TASK_MESSAGE,
     STATE_WAITING_FOR_TASK_SCHEDULE,
     STATE_WAITING_FOR_TASK_TARGET,
-    STATE_ADMIN_TASK_CONFIRM,
-    STATE_WAITING_FOR_ADMIN_COMMAND
+    STATE_ADMIN_TASK_CONFIRM
 ) = map(str, range(35))
 
 # --- Conversation Context Keys ---
@@ -294,29 +294,34 @@ def is_admin(user_id: int) -> bool:
     """Checks if a given user ID is in the ADMIN_IDS list."""
     return isinstance(user_id, int) and ADMIN_IDS and user_id in ADMIN_IDS
 
-log.info("Configuration loaded successfully.")
-
-# State definitions for conversation
-STATE_WAITING_FOR_COMMAND = 'WAITING_FOR_COMMAND'
-STATE_WAITING_FOR_ADMIN_COMMAND = 'WAITING_FOR_ADMIN_COMMAND'
-
-# Admin IDs list
-ADMIN_IDS = [7054186974]  # Replace with your actual admin IDs
-
 async def get_user(user_id: int):
     """Get user from database."""
-    # Implement your database query here
-    return None
+    try:
+        # Implement your database query here
+        # For now, return None to indicate user doesn't exist
+        return None
+    except Exception as e:
+        log.error(f"Error getting user {user_id}: {e}")
+        return None
 
 async def create_user(user_id: int, username: str):
     """Create new user in database."""
-    # Implement your database insertion here
-    pass
+    try:
+        # Implement your database insertion here
+        # For now, just log the creation
+        log.info(f"Created new user: {user_id} ({username})")
+    except Exception as e:
+        log.error(f"Error creating user {user_id}: {e}")
 
 async def get_user_language(user_id: int) -> str:
     """Get user's preferred language."""
-    # Implement your language retrieval logic here
-    return 'en'
+    try:
+        # Implement your language retrieval logic here
+        # For now, return 'en' as default
+        return 'en'
+    except Exception as e:
+        log.error(f"Error getting language for user {user_id}: {e}")
+        return 'en'
 
 def get_text(key: str, lang: str = 'en') -> str:
     """Get localized text."""
@@ -340,5 +345,14 @@ def build_admin_menu(user_id: int, context: 'CallbackContext'):
         [InlineKeyboardButton("Statistics", callback_data='admin_stats')]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+log.info("Configuration loaded successfully.")
+
+# State definitions for conversation
+STATE_WAITING_FOR_COMMAND = 'WAITING_FOR_COMMAND'
+STATE_WAITING_FOR_ADMIN_COMMAND = 'WAITING_FOR_ADMIN_COMMAND'
+
+# Admin IDs list
+ADMIN_IDS = [7054186974]  # Replace with your actual admin IDs
 
 # --- END OF FILE config.py ---
