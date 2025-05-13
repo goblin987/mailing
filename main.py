@@ -28,6 +28,17 @@ checker_thread: threading.Thread | None = None
 # Store the checker loop to safely interact with it
 checker_loop: asyncio.AbstractEventLoop | None = None
 
+async def run_background_tasks():
+    """Run background tasks in a separate asyncio loop."""
+    while True:
+        try:
+            if hasattr(telethon_api, 'check_tasks'):
+                await telethon_api.check_tasks()
+            await asyncio.sleep(60)  # Check every minute
+        except Exception as e:
+            log.error(f"Error in background tasks: {e}", exc_info=True)
+            await asyncio.sleep(60)  # Wait before retrying
+
 async def async_shutdown():
     """Async shutdown handler for graceful exit."""
     global _shutdown_in_progress, updater, checker_thread, checker_loop
@@ -40,7 +51,8 @@ async def async_shutdown():
 
     # 1. Stop Telethon background tasks (task checker) and disconnect clients
     log.info("Requesting Telethon components shutdown...")
-    telethon_api.shutdown_telethon() # Signals checker loop and disconnects bots
+    if hasattr(telethon_api, 'shutdown_telethon'):
+        telethon_api.shutdown_telethon() # Signals checker loop and disconnects bots
 
     # 2. Stop the PTB Updater polling
     if updater:
@@ -120,17 +132,9 @@ async def main():
         log.error(f"Error during initial userbot runtime initialization request: {e}", exc_info=True)
 
     # --- Start Background Task Checker ---
-    log.info("Starting Telethon background task checker thread...")
-    try:
-        # Skip background task checker if function doesn't exist
-        if hasattr(telethon_api, 'run_check_tasks_periodically'):
-            checker_thread = threading.Thread(target=telethon_api.run_check_tasks_periodically, daemon=True)
-            checker_thread.start()
-            log.info("Telethon background task checker thread started.")
-        else:
-            log.warning("Background task checker not available in telethon_utils, skipping...")
-    except Exception as e:
-        log.error(f"Error starting background task checker thread: {e}", exc_info=True)
+    log.info("Starting background tasks...")
+    background_task = asyncio.create_task(run_background_tasks())
+    log.info("Background tasks started.")
 
     # --- Register Signal Handlers ---
     log.info("Registering shutdown signal handlers...")
@@ -145,13 +149,20 @@ async def main():
         log.info("--- Bot is now running ---")
         log.info("Press Ctrl+C or send SIGTERM to stop.")
         
-        # Keep the main task running
+        # Keep the main task running and handle background tasks
         while True:
             await asyncio.sleep(1)
             
     except Exception as e:
         log.error(f"Error in main polling loop: {e}", exc_info=True)
         await async_shutdown()
+    finally:
+        if 'background_task' in locals():
+            background_task.cancel()
+            try:
+                await background_task
+            except asyncio.CancelledError:
+                pass
 
 if __name__ == '__main__':
     try:
