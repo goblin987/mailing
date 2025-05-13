@@ -82,6 +82,104 @@ from config import (
     build_admin_menu
 )
 
+# Define states as integers instead of strings for better compatibility
+COMMAND = 0
+ADMIN = 1
+
+async def start(update: Update, context: CallbackContext) -> int:
+    """Start command handler."""
+    user_id = update.effective_user.id
+    
+    # Send welcome message
+    await update.message.reply_text("Welcome to the bot! Use /admin to access admin features.")
+    
+    return COMMAND
+
+async def admin(update: Update, context: CallbackContext) -> int:
+    """Admin command handler."""
+    user_id = update.effective_user.id
+    
+    # Check if user is admin
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("Sorry, this command is only available for administrators.")
+        return COMMAND
+        
+    # Build and send admin menu
+    keyboard = [
+        [InlineKeyboardButton("Manage Users", callback_data='admin_users')],
+        [InlineKeyboardButton("Settings", callback_data='admin_settings')],
+        [InlineKeyboardButton("Statistics", callback_data='admin_stats')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "Admin Menu:\n1. Manage Users\n2. Settings\n3. Statistics",
+        reply_markup=reply_markup
+    )
+    
+    return ADMIN
+
+async def button(update: Update, context: CallbackContext) -> int:
+    """Handle button presses."""
+    query = update.callback_query
+    await query.answer()
+    
+    if not query.data:
+        return COMMAND
+    
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await query.message.reply_text("Sorry, this command is only available for administrators.")
+        return COMMAND
+    
+    if query.data == 'admin_users':
+        await query.message.reply_text("User management feature coming soon!")
+    elif query.data == 'admin_settings':
+        await query.message.reply_text("Settings feature coming soon!")
+    elif query.data == 'admin_stats':
+        await query.message.reply_text("Statistics feature coming soon!")
+    
+    return ADMIN
+
+async def text_handler(update: Update, context: CallbackContext) -> int:
+    """Handle text messages."""
+    return COMMAND
+
+async def cancel(update: Update, context: CallbackContext) -> int:
+    """Cancel command handler."""
+    await update.message.reply_text("Operation cancelled.")
+    return COMMAND
+
+def main() -> None:
+    """Set up and register handlers."""
+    
+    # Set up conversation handler
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler('start', start),
+            CommandHandler('admin', admin)
+        ],
+        states={
+            COMMAND: [
+                CommandHandler('start', start),
+                CommandHandler('admin', admin),
+                MessageHandler(Filters.text & ~Filters.command, text_handler)
+            ],
+            ADMIN: [
+                CommandHandler('start', start),
+                CommandHandler('admin', admin),
+                CallbackQueryHandler(button),
+                MessageHandler(Filters.text & ~Filters.command, text_handler)
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+        name="main_conversation",
+        persistent=False,
+        allow_reentry=True
+    )
+    
+    return conv_handler
+
 def async_handler(func: Callable) -> Callable:
     """Decorator to handle async handlers and ensure proper state returns."""
     @wraps(func)
@@ -2072,55 +2170,26 @@ async def conversation_fallback(update: Update, context: CallbackContext) -> int
 # THIS MUST BE AT THE END OF THE FILE, AFTER ALL HANDLER FUNCTIONS ARE DEFINED
 main_conversation = ConversationHandler(
     entry_points=[
-        CommandHandler('start', start_command),
-        CommandHandler('admin', admin_command),
-        CommandHandler('cancel', cancel_command)
+        CommandHandler('start', start),
+        CommandHandler('admin', admin)
     ],
     states={
-        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command, process_invitation_code)],
-        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command, process_admin_phone)],
-        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_id)],
-        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_hash)],
-        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_code)],
-        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_password)],
-        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command, process_admin_invite_details)],
-        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_code)],
-        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_days)],
-        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_code)],
-        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_count)],
-        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name)],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command, process_folder_links)],
-        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command, process_folder_rename)],
-        STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'primary'))],
-        STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_task_link(u, c, 'fallback'))],
-        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command, process_task_start_time)],
-        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_message)],
-        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_schedule)],
-        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command, admin_process_task_target)],
-        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler)],
-        STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler)],
-        STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler)],
-        STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_LANGUAGE: [CallbackQueryHandler(main_callback_handler)],
-        STATE_WAITING_FOR_ADMIN_COMMAND: [
-            CallbackQueryHandler(main_callback_handler),
-            MessageHandler(Filters.text & ~Filters.command, process_admin_command)
-        ]
+        COMMAND: [
+            CommandHandler('start', start),
+            CommandHandler('admin', admin),
+            MessageHandler(Filters.text & ~Filters.command, text_handler)
+        ],
+        ADMIN: [
+            CommandHandler('start', start),
+            CommandHandler('admin', admin),
+            CallbackQueryHandler(button),
+            MessageHandler(Filters.text & ~Filters.command, text_handler)
+        ],
     },
-    fallbacks=[
-        CommandHandler('cancel', cancel_command),
-        CallbackQueryHandler(main_callback_handler),
-        MessageHandler(Filters.all, conversation_fallback)
-    ],
+    fallbacks=[CommandHandler('cancel', cancel)],
     name="main_conversation",
     persistent=False,
-    allow_reentry=True,
-    per_message=False,
-    per_chat=True,
-    run_async=True
+    allow_reentry=True
 )
 
 log.info("Handlers module loaded and structure updated (async command handlers, ConversationHandler at end).")
