@@ -113,7 +113,7 @@ async def start_command(update: Update, context: CallbackContext) -> int:
                 parse_mode=ParseMode.HTML
             )
             await _show_menu_async(update, context, build_admin_menu)
-            return ConversationHandler.END
+            return STATE_WAITING_FOR_ADMIN_COMMAND
         
         # Check if user exists in database
         client_info = db.find_client_by_user_id(user_id)
@@ -125,7 +125,7 @@ async def start_command(update: Update, context: CallbackContext) -> int:
                 parse_mode=ParseMode.HTML
             )
             await _show_menu_async(update, context, build_client_menu)
-            return ConversationHandler.END
+            return STATE_WAITING_FOR_CODE
         else:
             # New user
             log.info(f"New user {user_id} started the bot")
@@ -2105,6 +2105,10 @@ main_conversation = ConversationHandler(
         STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler)],
         STATE_ADMIN_TASK_CONFIRM: [CallbackQueryHandler(main_callback_handler)],
         STATE_WAITING_FOR_LANGUAGE: [CallbackQueryHandler(main_callback_handler)],
+        STATE_WAITING_FOR_ADMIN_COMMAND: [
+            CallbackQueryHandler(main_callback_handler),
+            MessageHandler(Filters.text & ~Filters.command, process_admin_command)
+        ]
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command),
@@ -2120,3 +2124,21 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded and structure updated (async command handlers, ConversationHandler at end).")
+
+@async_handler
+async def process_admin_command(update: Update, context: CallbackContext) -> int:
+    """Process text commands in admin mode."""
+    user_id, lang = get_user_id_and_lang(update, context)
+    
+    if not is_admin(user_id):
+        await update.message.reply_text(
+            get_text(user_id, 'error_not_admin', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+    
+    command_text = update.message.text.strip().lower()
+    
+    # Show admin menu for any unrecognized command
+    await _show_menu_async(update, context, build_admin_menu)
+    return STATE_WAITING_FOR_ADMIN_COMMAND
