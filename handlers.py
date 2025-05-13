@@ -287,6 +287,24 @@ async def _show_menu_async(update: Update, context: CallbackContext, menu_builde
     title, markup, parse_mode = menu_builder_func(user_id, context)
     await send_or_edit_message(update, context, title, reply_markup=markup, parse_mode=parse_mode)
 
+@async_handler
+async def process_admin_command(update: Update, context: CallbackContext) -> int:
+    """Process text commands in admin mode."""
+    user_id, lang = get_user_id_and_lang(update, context)
+    
+    if not is_admin(user_id):
+        await update.message.reply_text(
+            get_text(user_id, 'error_not_admin', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+    
+    command_text = update.message.text.strip().lower()
+    
+    # Show admin menu for any unrecognized command
+    await _show_menu_async(update, context, build_admin_menu)
+    return STATE_WAITING_FOR_ADMIN_COMMAND
+
 # --- COMMAND HANDLERS (NOW ASYNC) ---
 async def admin_command(update: Update, context: CallbackContext) -> int:
     """Entry point for the /admin command."""
@@ -2125,21 +2143,3 @@ main_conversation = ConversationHandler(
 )
 
 log.info("Handlers module loaded and structure updated (async command handlers, ConversationHandler at end).")
-
-@async_handler
-async def process_admin_command(update: Update, context: CallbackContext) -> int:
-    """Process text commands in admin mode."""
-    user_id, lang = get_user_id_and_lang(update, context)
-    
-    if not is_admin(user_id):
-        await update.message.reply_text(
-            get_text(user_id, 'error_not_admin', lang_override=lang),
-            parse_mode=ParseMode.HTML
-        )
-        return ConversationHandler.END
-    
-    command_text = update.message.text.strip().lower()
-    
-    # Show admin menu for any unrecognized command
-    await _show_menu_async(update, context, build_admin_menu)
-    return STATE_WAITING_FOR_ADMIN_COMMAND
