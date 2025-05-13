@@ -98,22 +98,40 @@ async def start_command(update: Update, context: CallbackContext) -> int:
         
     clear_conversation_data(context)
 
-    if is_admin(user_id):
-        await _show_menu_async(update, context, build_admin_menu)
-        return ConversationHandler.END
-    
-    # Check if user exists in database
-    client_info = db.find_client_by_user_id(user_id)
-    if client_info:
-        await _show_menu_async(update, context, build_client_menu)
-        return ConversationHandler.END
-    else:
-        # New user, ask for invitation code
+    try:
+        # Check if user is admin first
+        if is_admin(user_id):
+            await update.message.reply_text(
+                get_text(user_id, 'welcome_admin', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            await _show_menu_async(update, context, build_admin_menu)
+            return ConversationHandler.END
+        
+        # Check if user exists in database
+        client_info = db.find_client_by_user_id(user_id)
+        if client_info:
+            # Existing client
+            await update.message.reply_text(
+                get_text(user_id, 'welcome_back', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            await _show_menu_async(update, context, build_client_menu)
+            return ConversationHandler.END
+        else:
+            # New user
+            await update.message.reply_text(
+                get_text(user_id, 'welcome_new_user', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return STATE_WAITING_FOR_CODE
+    except Exception as e:
+        log.error(f"Error in start_command: {e}", exc_info=True)
         await update.message.reply_text(
-            get_text(user_id, 'welcome_new_user', lang_override=lang),
+            get_text(user_id, 'error_generic', lang_override=lang),
             parse_mode=ParseMode.HTML
         )
-        return STATE_WAITING_FOR_CODE
+        return ConversationHandler.END
 
 @async_handler
 async def admin_command(update: Update, context: CallbackContext) -> int:
@@ -346,35 +364,71 @@ async def set_language_handler(update: Update, context: CallbackContext) -> int 
     return ConversationHandler.END
 
 # --- Conversation State Handlers ---
+@async_handler
 async def process_invitation_code(update: Update, context: CallbackContext) -> int:
-    user_id, lang = get_user_id_and_lang(update, context); code_input = update.message.text.strip(); log.info(f"Processing invitation code '{code_input}' for user {user_id}")
-    client_info_db = db.find_client_by_user_id(user_id)
-    if client_info_db:
-        now_ts = int(datetime.now(UTC_TZ).timestamp())
-        if client_info_db['subscription_end'] > now_ts: await send_or_edit_message(update, context, get_text(user_id, 'user_already_active', lang_override=lang)); await client_menu(update, context); return ConversationHandler.END
-    success, reason_or_client_data = db.activate_client(code_input, user_id)
-    if success:
-        if reason_or_client_data == "activation_success":
-            client_data = db.find_client_by_code(code_input)
-            if client_data: 
-                if client_data.get('language'):
-                    context.user_data[CTX_LANG] = client_data['language']
-                    lang = client_data['language']
-                await send_or_edit_message(update, context, get_text(user_id, 'activation_success', lang_override=lang)); 
-                await client_menu(update, context); return ConversationHandler.END
-            else:
-                 await send_or_edit_message(update, context, get_text(user_id, 'activation_error', lang_override=lang)); return STATE_WAITING_FOR_CODE
-        elif reason_or_client_data == "already_active": await send_or_edit_message(update, context, get_text(user_id, 'already_active', lang_override=lang)); await client_menu(update, context); return ConversationHandler.END
-        else: log.error(f"activate_client returned True but unexpected reason: {reason_or_client_data}"); await send_or_edit_message(update, context, get_text(user_id, 'activation_error', lang_override=lang)); return STATE_WAITING_FOR_CODE
-    else:
-        error_key = str(reason_or_client_data)
-        translation_map = {
-            "user_already_active": "user_already_active", "code_not_found": "code_not_found", 
-            "code_already_used": "code_already_used", "subscription_expired": "subscription_expired", 
-            "activation_error": "activation_error", "activation_db_error": "activation_db_error",
-        }
-        message_key = translation_map.get(error_key, 'activation_error')
-        await send_or_edit_message(update, context, get_text(user_id, message_key, lang_override=lang)); return STATE_WAITING_FOR_CODE
+    """Process the invitation code sent by a new user."""
+    user_id, lang = get_user_id_and_lang(update, context)
+    code = update.message.text.strip().lower()
+    log.info(f"Processing invitation code '{code}' for user {user_id}")
+
+    # Validate code format (8 characters, alphanumeric)
+    if not re.match(r'^[a-f0-9]{8}$', code):
+        await update.message.reply_text(
+            get_text(user_id, 'invalid_code_format', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return STATE_WAITING_FOR_CODE
+
+    try:
+        # Check if code exists and is valid
+        client_info = db.find_client_by_code(code)
+        if not client_info:
+            await update.message.reply_text(
+                get_text(user_id, 'code_not_found', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return STATE_WAITING_FOR_CODE
+
+        # Check if code is already used
+        if client_info['user_id'] is not None and client_info['user_id'] != user_id:
+            await update.message.reply_text(
+                get_text(user_id, 'code_already_used', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return STATE_WAITING_FOR_CODE
+
+        # Check if user already has an active account
+        existing_client = db.find_client_by_user_id(user_id)
+        if existing_client and existing_client['invitation_code'] != code:
+            await update.message.reply_text(
+                get_text(user_id, 'user_already_active', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return ConversationHandler.END
+
+        # Activate the code for this user
+        if db.activate_client(code, user_id):
+            await update.message.reply_text(
+                get_text(user_id, 'activation_success', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            # Show the client menu
+            await client_menu(update, context)
+            return ConversationHandler.END
+        else:
+            await update.message.reply_text(
+                get_text(user_id, 'activation_db_error', lang_override=lang),
+                parse_mode=ParseMode.HTML
+            )
+            return STATE_WAITING_FOR_CODE
+
+    except Exception as e:
+        log.error(f"Error processing invitation code: {e}", exc_info=True)
+        await update.message.reply_text(
+            get_text(user_id, 'activation_error', lang_override=lang),
+            parse_mode=ParseMode.HTML
+        )
+        return STATE_WAITING_FOR_CODE
 
 async def process_admin_phone(update: Update, context: CallbackContext) -> str | int:
     user_id, lang = get_user_id_and_lang(update, context); phone = update.message.text.strip(); log.info(f"process_admin_phone: Processing phone {phone} for user {user_id}")
@@ -2053,7 +2107,7 @@ main_conversation = ConversationHandler(
     allow_reentry=True,
     per_message=False,
     per_chat=True,
-    run_async=True  # Enable async mode for all handlers
+    run_async=True
 )
 
 log.info("Handlers module loaded and structure updated (async command handlers, ConversationHandler at end).")
