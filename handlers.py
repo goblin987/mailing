@@ -24,10 +24,11 @@ import telethon_utils as telethon_api
 from config import (
     log, ADMIN_IDS, is_admin, LITHUANIA_TZ, UTC_TZ, SESSION_DIR, ITEMS_PER_PAGE,
     # States
+    STATE_WAITING_FOR_COMMAND, STATE_WAITING_FOR_ADMIN_COMMAND,
     STATE_WAITING_FOR_CODE, STATE_WAITING_FOR_PHONE, STATE_WAITING_FOR_API_ID,
     STATE_WAITING_FOR_API_HASH, STATE_WAITING_FOR_CODE_USERBOT,
     STATE_WAITING_FOR_PASSWORD, STATE_WAITING_FOR_SUB_DETAILS,
-    STATE_WAITING_FOR_FOLDER_CHOICE, # Deprecated
+    STATE_WAITING_FOR_FOLDER_CHOICE,
     STATE_WAITING_FOR_FOLDER_NAME,
     STATE_WAITING_FOR_FOLDER_SELECTION, STATE_TASK_SETUP,
     STATE_WAITING_FOR_LANGUAGE, STATE_WAITING_FOR_EXTEND_CODE,
@@ -41,7 +42,7 @@ from config import (
     STATE_ADMIN_TASK_SCHEDULE, STATE_ADMIN_TASK_TARGET,
     STATE_WAITING_FOR_TASK_BOT, STATE_WAITING_FOR_TASK_MESSAGE,
     STATE_WAITING_FOR_TASK_SCHEDULE, STATE_WAITING_FOR_TASK_TARGET,
-    STATE_ADMIN_TASK_CONFIRM, STATE_WAITING_FOR_ADMIN_COMMAND,
+    STATE_ADMIN_TASK_CONFIRM,
 
     # Context Keys
     CTX_USER_ID, CTX_LANG, CTX_PHONE, CTX_API_ID, CTX_API_HASH,
@@ -54,83 +55,76 @@ from config import (
     # Callback Prefixes
     CALLBACK_ADMIN_PREFIX, CALLBACK_CLIENT_PREFIX, CALLBACK_TASK_PREFIX,
     CALLBACK_FOLDER_PREFIX, CALLBACK_JOIN_PREFIX, CALLBACK_LANG_PREFIX,
-    CALLBACK_INTERVAL_PREFIX, CALLBACK_GENERIC_PREFIX
+    CALLBACK_INTERVAL_PREFIX, CALLBACK_GENERIC_PREFIX,
+    
+    # Functions
+    get_user, create_user, get_user_language, get_text, build_admin_menu
 )
 from translations import get_text, language_names, translations
 from utils import get_user_id_and_lang, send_or_edit_message, clear_conversation_data
-
-# Import admin handlers for use as state handlers (ensure they are async)
-from admin_handlers import (
-    admin_process_task_message,
-    admin_process_task_schedule,
-    admin_process_task_target
-)
 
 # Add this at the top of the file, after imports
 from functools import wraps
 from typing import Callable, Any
 import logging
 from inspect import isawaitable
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (
-    CallbackContext, ConversationHandler, CommandHandler,
-    MessageHandler, CallbackQueryHandler, Filters
-)
-from config import (
-    STATE_WAITING_FOR_COMMAND, STATE_WAITING_FOR_ADMIN_COMMAND,
-    ADMIN_IDS, get_text, get_user, create_user, get_user_language,
-    build_admin_menu
-)
 
 # Define states as integers instead of strings for better compatibility
 COMMAND = 0
 ADMIN = 1
 
+@async_handler
 async def start(update: Update, context: CallbackContext) -> int:
     """Start command handler."""
     user_id = update.effective_user.id
     
-    # Send welcome message
-    await update.message.reply_text("Welcome to the bot! Use /admin to access admin features.")
+    # Check if user exists in database, if not, create new user
+    user = await get_user(user_id)
+    if not user:
+        await create_user(user_id, update.effective_user.username or "")
     
-    return COMMAND
+    # Get user's language
+    lang = await get_user_language(user_id) or 'en'
+    
+    # Send welcome message
+    welcome_text = get_text('welcome_message', lang)
+    await update.message.reply_text(welcome_text)
+    
+    # Return to waiting for command state
+    return STATE_WAITING_FOR_COMMAND
 
+@async_handler
 async def admin(update: Update, context: CallbackContext) -> int:
     """Admin command handler."""
     user_id = update.effective_user.id
     
     # Check if user is admin
     if user_id not in ADMIN_IDS:
-        await update.message.reply_text("Sorry, this command is only available for administrators.")
-        return COMMAND
+        await update.message.reply_text(get_text('not_admin', await get_user_language(user_id)))
+        return STATE_WAITING_FOR_COMMAND
         
     # Build and send admin menu
-    keyboard = [
-        [InlineKeyboardButton("Manage Users", callback_data='admin_users')],
-        [InlineKeyboardButton("Settings", callback_data='admin_settings')],
-        [InlineKeyboardButton("Statistics", callback_data='admin_stats')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+    reply_markup = build_admin_menu(user_id, context)
     await update.message.reply_text(
-        "Admin Menu:\n1. Manage Users\n2. Settings\n3. Statistics",
+        get_text('admin_menu', await get_user_language(user_id)),
         reply_markup=reply_markup
     )
     
-    return ADMIN
+    return STATE_WAITING_FOR_ADMIN_COMMAND
 
+@async_handler
 async def button(update: Update, context: CallbackContext) -> int:
     """Handle button presses."""
     query = update.callback_query
     await query.answer()
     
     if not query.data:
-        return COMMAND
+        return STATE_WAITING_FOR_COMMAND
     
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await query.message.reply_text("Sorry, this command is only available for administrators.")
-        return COMMAND
+        await query.message.reply_text(get_text('not_admin', await get_user_language(user_id)))
+        return STATE_WAITING_FOR_COMMAND
     
     if query.data == 'admin_users':
         await query.message.reply_text("User management feature coming soon!")
@@ -139,18 +133,20 @@ async def button(update: Update, context: CallbackContext) -> int:
     elif query.data == 'admin_stats':
         await query.message.reply_text("Statistics feature coming soon!")
     
-    return ADMIN
+    return STATE_WAITING_FOR_ADMIN_COMMAND
 
+@async_handler
 async def text_handler(update: Update, context: CallbackContext) -> int:
     """Handle text messages."""
-    return COMMAND
+    return STATE_WAITING_FOR_COMMAND
 
+@async_handler
 async def cancel(update: Update, context: CallbackContext) -> int:
     """Cancel command handler."""
     await update.message.reply_text("Operation cancelled.")
-    return COMMAND
+    return STATE_WAITING_FOR_COMMAND
 
-def main() -> None:
+def main() -> ConversationHandler:
     """Set up and register handlers."""
     
     # Set up conversation handler
@@ -160,12 +156,12 @@ def main() -> None:
             CommandHandler('admin', admin)
         ],
         states={
-            COMMAND: [
+            STATE_WAITING_FOR_COMMAND: [
                 CommandHandler('start', start),
                 CommandHandler('admin', admin),
                 MessageHandler(Filters.text & ~Filters.command, text_handler)
             ],
-            ADMIN: [
+            STATE_WAITING_FOR_ADMIN_COMMAND: [
                 CommandHandler('start', start),
                 CommandHandler('admin', admin),
                 CallbackQueryHandler(button),
@@ -179,6 +175,32 @@ def main() -> None:
     )
     
     return conv_handler
+
+async def async_error_handler(update: object, context: CallbackContext) -> None:
+    """Handle errors in async handlers."""
+    log.error(msg="[async_error_handler] Exception while handling an update:", exc_info=context.error)
+    
+    # Get user and chat IDs if available
+    user_id = None
+    chat_id = None
+    if isinstance(update, Update):
+        if update.effective_user:
+            user_id = update.effective_user.id
+        if update.effective_chat:
+            chat_id = update.effective_chat.id
+    
+    # Log the error details
+    log.error(f"[async_error_handler] Error occurred for user {user_id} in chat {chat_id}")
+    
+    # Try to send a message to the user
+    try:
+        if update and isinstance(update, Update) and update.effective_message:
+            log.info(f"[async_error_handler] Attempting to send generic error to user {user_id}, chat {chat_id}")
+            await update.effective_message.reply_text(
+                "Sorry, an error occurred while processing your request. Please try again later."
+            )
+    except Exception as e:
+        log.error(f"[async_error_handler] Failed to send async error message: {e}", exc_info=True)
 
 def async_handler(func: Callable) -> Callable:
     """Decorator to handle async handlers and ensure proper state returns."""
@@ -2174,12 +2196,12 @@ main_conversation = ConversationHandler(
         CommandHandler('admin', admin)
     ],
     states={
-        COMMAND: [
+        STATE_WAITING_FOR_COMMAND: [
             CommandHandler('start', start),
             CommandHandler('admin', admin),
             MessageHandler(Filters.text & ~Filters.command, text_handler)
         ],
-        ADMIN: [
+        STATE_WAITING_FOR_ADMIN_COMMAND: [
             CommandHandler('start', start),
             CommandHandler('admin', admin),
             CallbackQueryHandler(button),
