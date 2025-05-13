@@ -92,13 +92,14 @@ async def main():
     # --- Initialize PTB ---
     log.info("Initializing PTB Updater...")
     try:
-        updater = Updater(token=BOT_TOKEN, use_context=True, persistence=None)
-        log.info("PTB Updater initialized WITHOUT persistence.")
+        updater = Updater(token=BOT_TOKEN, use_context=True, workers=4)  # Added workers parameter
+        log.info("PTB Updater initialized with 4 workers.")
     except Exception as e:
         log.critical(f"CRITICAL: Failed to initialize PTB Updater: {e}", exc_info=True)
         sys.exit(1)
 
     dp: Dispatcher = updater.dispatcher
+    dp.use_context = True
 
     # --- Register Handlers ---
     log.info("Registering handlers...")
@@ -125,71 +126,37 @@ async def main():
     # --- Start Background Task Checker ---
     log.info("Starting Telethon background task checker thread...")
     try:
-        checker_loop = asyncio.new_event_loop()
-        def run_checker_in_loop():
-            asyncio.set_event_loop(checker_loop)
-            try:
-                if asyncio.iscoroutinefunction(telethon_api.run_check_tasks_periodically):
-                    checker_loop.run_until_complete(telethon_api.run_check_tasks_periodically())
-                else:
-                    telethon_api.run_check_tasks_periodically()
-            except asyncio.CancelledError:
-                log.info("Background task checker loop cancelled.")
-            except Exception as task_e:
-                log.critical(f"CRITICAL: Background task checker loop crashed: {task_e}", exc_info=True)
-            finally:
-                if not checker_loop.is_closed():
-                    checker_loop.close()
-                    log.info("Checker loop closed.")
-
-        checker_thread = threading.Thread(target=run_checker_in_loop, name="TaskCheckerThread", daemon=True)
+        checker_thread = threading.Thread(target=telethon_api.run_background_task_checker)
+        checker_thread.daemon = True
         checker_thread.start()
         log.info("Telethon background task checker thread started.")
     except Exception as e:
-        log.critical(f"CRITICAL: Failed to start background task checker thread: {e}", exc_info=True)
+        log.error(f"Error starting background task checker thread: {e}", exc_info=True)
 
     # --- Register Signal Handlers ---
     log.info("Registering shutdown signal handlers...")
-    try:
-        signal.signal(signal.SIGTERM, shutdown)
-        signal.signal(signal.SIGINT, shutdown)
-        log.info("Signal handlers registered.")
-    except ValueError as e:
-        log.warning(f"Could not register all signal handlers: {e}")
-        try:
-            signal.signal(signal.SIGINT, shutdown)
-        except Exception:
-            pass
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, signal_handler)
+    log.info("Signal handlers registered.")
 
-    # --- Start Polling ---
+    # --- Start Bot ---
     log.info("Starting PTB polling...")
-    updater.start_polling()
-    log.info("--- Bot is now running ---")
-    log.info("Press Ctrl+C or send SIGTERM to stop.")
-
     try:
-        await asyncio.get_event_loop().create_future()  # Keep the event loop running
-    except asyncio.CancelledError:
-        pass
-    except KeyboardInterrupt:
-        if not _shutdown_in_progress:
-            shutdown(signal.SIGINT, None)
+        updater.start_polling(drop_pending_updates=True)
+        log.info("--- Bot is now running ---")
+        log.info("Press Ctrl+C or send SIGTERM to stop.")
+        await asyncio.Event().wait()  # Keep the main task running
     except Exception as e:
-        log.error(f"Main loop exited with an exception: {e}", exc_info=True)
-        if not _shutdown_in_progress:
-            shutdown(0, None)
+        log.error(f"Error in main polling loop: {e}", exc_info=True)
+        await shutdown()
 
-    log.info("Bot polling loop exited.")
-    if not _shutdown_in_progress:
-        log.warning("Bot exited unexpectedly. Initiating manual cleanup...")
-        shutdown(0, None)
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        log.info("Received keyboard interrupt, shutting down...")
+        log.info("Received KeyboardInterrupt, initiating shutdown...")
     except Exception as e:
-        log.critical(f"Fatal error: {e}", exc_info=True)
-        sys.exit(1)
+        log.error(f"Fatal error in main: {e}", exc_info=True)
+    finally:
+        asyncio.run(shutdown())
 # --- END OF FILE main.py ---
