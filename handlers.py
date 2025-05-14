@@ -1236,15 +1236,6 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
         
     clear_conversation_data(context); return ConversationHandler.END
 
-# ... (rest of handlers: client_show_stats, task_show_settings_menu etc. need to be converted similarly if they use await or return states for ConversationHandler)
-# For brevity, I'll assume the structure of those provided previously is mostly fine, focusing on the async/state returns.
-# Key is that any handler in ConversationHandler returns a state constant or ConversationHandler.END.
-
-# Assume the rest of the functions (client_show_stats, task_show_settings_menu, etc.)
-# are defined as in the previous version of handlers.py, ensuring they are async def
-# and correctly return states or ConversationHandler.END.
-# For example:
-
 async def client_show_stats(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     if query: await query.answer()
@@ -1909,12 +1900,12 @@ async def admin_select_task_bot(update: Update, context: CallbackContext) -> str
     keyboard.append([InlineKeyboardButton(get_translation_text(user_id, 'button_back', lang_override=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}manage_tasks")])
     markup = InlineKeyboardMarkup(keyboard)
     await send_or_edit_message(update, context, get_translation_text(user_id, 'admin_task_select_bot', lang_override=lang), reply_markup=markup)
-    # This is tricky. This function shows a menu. The *response* to this menu (a callback)
-    # will then set CTX_TASK_BOT and transition to STATE_ADMIN_TASK_MESSAGE.
-    # So, this function itself should return a state that waits for that callback.
-    # We can use STATE_WAITING_FOR_TASK_BOT (or a generic admin menu state if callbacks are handled globally by main_callback_handler).
-    # Given main_callback_handler handles "admin_task_bot_", this can return END.
-    return ConversationHandler.END # Callback will trigger next step.
+    # This function shows a menu. The *response* to this menu (a callback via main_callback_handler)
+    # will set CTX_TASK_BOT and transition to STATE_ADMIN_TASK_MESSAGE.
+    # This function itself returns a state that will receive that callback.
+    # The main_callback_handler for admin_task_bot_ will then transition.
+    return STATE_WAITING_FOR_ADMIN_COMMAND # Or a more specific state if only these buttons are expected
+
 
 async def admin_task_options(update: Update, context: CallbackContext) -> int: # Returns END
     query = update.callback_query
@@ -2205,12 +2196,23 @@ main_conversation = ConversationHandler(
         STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name)],
         STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
         STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
-        STATE_WAITING_FOR_GROUP_LINKS: [MessageHandler(Filters.text & ~Filters.command, process_join_group_links)], # Also used by folder_links
+        # STATE_WAITING_FOR_GROUP_LINKS has two entry points: general join and folder add
+        # For folder add, process_folder_links is called.
+        # For general join, process_join_group_links is called.
+        # This means the CallbackQueryHandler that leads to this state must correctly route or this state must distinguish.
+        # Let's assume process_join_group_links is for the generic client join flow,
+        # and process_folder_links is specifically for adding to an existing folder.
+        # The state STATE_WAITING_FOR_GROUP_LINKS will use different handlers based on context if needed,
+        # or the callback leading to it should direct to a more specific state.
+        # For now, main_callback_handler sets up for process_join_group_links. process_folder_links is also used.
+        STATE_WAITING_FOR_GROUP_LINKS: [
+            MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_folder_links(u, c) if CTX_FOLDER_ID in c.user_data else process_join_group_links(u, c))
+        ],
         STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
         STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command, process_folder_rename)],
 
         STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler, pattern=f"^({CALLBACK_TASK_PREFIX}|{CALLBACK_JOIN_PREFIX})")],
-        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_TASK_PREFIX}")],
+        STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_TASK_PREFIX}|{CALLBACK_INTERVAL_PREFIX}")], # Added Interval Prefix
         STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u,c: process_task_link(u,c,'primary'))],
         STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, lambda u,c: process_task_link(u,c,'fallback'))],
         STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command, process_task_start_time)],
@@ -2219,159 +2221,20 @@ main_conversation = ConversationHandler(
         STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command, admin_handlers.admin_process_task_schedule)],
         STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command, admin_handlers.admin_process_task_target)],
         
-        # A general callback handler for buttons not specific to a state (e.g. simple back buttons)
-        # This should be more specific with patterns if used widely
-        ConversationHandler.TIMEOUT: [MessageHandler(Filters.text, conversation_fallback)], # Example timeout handler
+        ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, conversation_fallback)],
     },
     fallbacks=[
         CommandHandler('cancel', cancel_command_general),
-        CallbackQueryHandler(main_callback_handler), # Catch-all for unhandled callbacks
-        MessageHandler(Filters.all, conversation_fallback) # Catch-all for any other message
+        CallbackQueryHandler(main_callback_handler), 
+        MessageHandler(Filters.all, conversation_fallback) 
     ],
     name="main_conversation",
     persistent=False,
     allow_reentry=True,
-    conversation_timeout=timedelta(hours=1).total_seconds() # Example timeout
+    conversation_timeout=timedelta(hours=1).total_seconds()
 )
 
 def main() -> ConversationHandler:
     return main_conversation
 
 log.info("Handlers module loaded and structure updated.")
-# --- END OF FILE handlers.py ---
-```
-
---- START OF FILE `admin_handlers.py` ---
-```python
-# --- START OF FILE admin_handlers.py ---
-
-import html
-import re # For potential validation
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
-from telegram.ext import CallbackContext, ConversationHandler
-
-# Import shared constants, helpers, DB etc. from correct locations
-from config import (
-    log, ADMIN_IDS, is_admin,
-    # States needed for transitions within this flow
-    STATE_ADMIN_TASK_MESSAGE, STATE_ADMIN_TASK_SCHEDULE, STATE_ADMIN_TASK_TARGET,
-    STATE_ADMIN_TASK_CONFIRM,
-    # Context keys used
-    CTX_TASK_BOT, CTX_TASK_MESSAGE, CTX_TASK_SCHEDULE, CTX_TASK_TARGET,
-    CTX_TASK_TARGET_TYPE, CTX_TASK_TARGET_FOLDER,
-    CALLBACK_ADMIN_PREFIX, # For potential internal buttons, though not used in this simple flow
-    STATE_WAITING_FOR_ADMIN_COMMAND # To return to admin menu
-)
-import database as db
-from translations import get_text
-from utils import (
-    get_user_id_and_lang,
-    send_or_edit_message,
-    clear_conversation_data
-)
-
-# DO NOT import from handlers.py (to avoid circular dependencies)
-
-# --- Admin Task Creation State Handlers ---
-
-async def admin_process_task_message(update: Update, context: CallbackContext) -> str:
-    """Handles receiving the message/link for an admin task."""
-    user_id, lang = get_user_id_and_lang(update, context)
-    # No need for admin check if entry point (e.g. main_callback_handler) is already admin protected
-
-    message_text = update.message.text
-    if not message_text or message_text.isspace():
-        await send_or_edit_message(update, context, get_text(user_id, 'admin_task_invalid_link', lang_override=lang))
-        return STATE_ADMIN_TASK_MESSAGE # Re-ask
-
-    context.user_data[CTX_TASK_MESSAGE] = message_text
-    log.info(f"Admin Task: Stored message for user {user_id}: {message_text[:50]}...")
-
-    await send_or_edit_message(update, context, get_text(user_id, 'admin_task_enter_schedule', lang_override=lang))
-    return STATE_ADMIN_TASK_SCHEDULE
-
-async def admin_process_task_schedule(update: Update, context: CallbackContext) -> str:
-    """Handles receiving the schedule (cron string) for an admin task."""
-    user_id, lang = get_user_id_and_lang(update, context)
-
-    schedule_text = update.message.text.strip()
-    # Basic Cron format validation:
-    parts = schedule_text.split()
-    if len(parts) != 5: # Rudimentary check
-        await send_or_edit_message(update, context, get_text(user_id, 'admin_task_invalid_schedule', lang_override=lang))
-        return STATE_ADMIN_TASK_SCHEDULE # Re-ask
-    # TODO: Add more robust Cron validation if needed (e.g., using a library)
-
-    context.user_data[CTX_TASK_SCHEDULE] = schedule_text
-    log.info(f"Admin Task: Stored schedule for user {user_id}: {schedule_text}")
-
-    await send_or_edit_message(update, context, get_text(user_id, 'admin_task_enter_target', lang_override=lang))
-    return STATE_ADMIN_TASK_TARGET
-
-async def admin_process_task_target(update: Update, context: CallbackContext) -> int: # Returns int (END)
-    """Handles receiving the target, creates the task, and ends the admin task creation flow."""
-    user_id, lang = get_user_id_and_lang(update, context)
-
-    target_text = update.message.text.strip()
-    # TODO: Add more robust target validation (e.g., check if it's a valid ID or @username format)
-    if not target_text:
-         await send_or_edit_message(update, context, get_text(user_id, 'admin_task_invalid_target', lang_override=lang))
-         return STATE_ADMIN_TASK_TARGET # Re-ask
-
-    # We should have all pieces now: Bot, Message, Schedule
-    bot_phone = context.user_data.get(CTX_TASK_BOT)
-    message_content = context.user_data.get(CTX_TASK_MESSAGE) # Renamed from 'message' to avoid conflict
-    schedule = context.user_data.get(CTX_TASK_SCHEDULE)
-
-    if not all([bot_phone, message_content, schedule]):
-        log.error(f"Admin Task Creation: Missing context data for user {user_id}. Bot: {bot_phone}, Msg: {message_content}, Sched: {schedule}")
-        await send_or_edit_message(update, context, get_text(user_id, 'session_expired', lang_override=lang))
-        # Clear only admin task specific data
-        for key in [CTX_TASK_BOT, CTX_TASK_MESSAGE, CTX_TASK_SCHEDULE, CTX_TASK_TARGET]:
-            context.user_data.pop(key, None)
-        # Return to main admin menu or end
-        # NOTE: This function is part of main_conversation. Returning STATE_WAITING_FOR_ADMIN_COMMAND
-        # would take it back to the admin menu within that conversation.
-        # Returning ConversationHandler.END ends the *entire* main_conversation.
-        # For a sub-flow, it's usually better to return to a state within the main conversation.
-        # Or, if admin task creation was its own ConversationHandler, then END would be appropriate.
-        # Assuming it's part of main_conversation:
-        return STATE_WAITING_FOR_ADMIN_COMMAND # Or a generic admin menu display function if not using state
-
-    # Create the task in DB
-    task_id = db.create_admin_task(
-        userbot_phone=bot_phone,
-        message=message_content,
-        schedule=schedule,
-        target=target_text,
-        created_by=user_id
-    )
-
-    if task_id:
-        await send_or_edit_message(update, context, get_text(user_id, 'admin_task_created', lang_override=lang))
-        log.info(f"Admin task {task_id} created by user {user_id}.")
-        db.log_event_db("Admin Task Created", f"TaskID: {task_id}, Target: {target_text}", user_id=user_id, userbot_phone=bot_phone)
-    else:
-        await send_or_edit_message(update, context, get_text(user_id, 'admin_task_error', lang_override=lang))
-        db.log_event_db("Admin Task Creation Failed", f"Target: {target_text}", user_id=user_id, userbot_phone=bot_phone)
-
-    # Clear specific task data after completion or error
-    for key in [CTX_TASK_BOT, CTX_TASK_MESSAGE, CTX_TASK_SCHEDULE, CTX_TASK_TARGET]:
-        context.user_data.pop(key, None)
-
-    # End this specific sub-flow within the admin conversation.
-    # We should return to a state where the admin can issue new commands or see the menu.
-    # If admin_command_entry is the main way to see admin menu, this should probably return STATE_WAITING_FOR_ADMIN_COMMAND
-    # or call a function that displays the admin menu and returns that state.
-    # For now, let's explicitly go back to the admin menu state if part of main_conversation.
-    # If admin_handlers.py was to define its OWN ConversationHandler, this would be ConversationHandler.END.
-    # Since it's integrated into handlers.py main_conversation:
-    # To show admin menu again, we can't directly call admin_command_entry.
-    # Best to return STATE_WAITING_FOR_ADMIN_COMMAND which expects callbacks or text.
-    # The calling main_callback_handler in handlers.py would then ideally refresh the menu.
-    
-    # Let the main_callback_handler in handlers.py (or the fallback for STATE_WAITING_FOR_ADMIN_COMMAND)
-    # decide to show the admin menu again.
-    # This function itself ends its part of the flow.
-    return STATE_WAITING_FOR_ADMIN_COMMAND
