@@ -262,89 +262,55 @@ except pytz.UnknownTimeZoneError as e:
     STATE_ADMIN_TASK_MESSAGE,
     STATE_ADMIN_TASK_SCHEDULE,
     STATE_ADMIN_TASK_TARGET,
-    STATE_WAITING_FOR_TASK_BOT,
-    STATE_WAITING_FOR_TASK_MESSAGE,
-    STATE_WAITING_FOR_TASK_SCHEDULE,
-    STATE_WAITING_FOR_TASK_TARGET,
-    STATE_ADMIN_TASK_CONFIRM
-) = map(str, range(36))  # 36 states total
+    STATE_WAITING_FOR_TASK_BOT, # Note: CTX_TASK_BOT is used for admin task creation flow, this state might be redundant or for client flow
+    STATE_WAITING_FOR_TASK_MESSAGE, # Client flow
+    STATE_WAITING_FOR_TASK_SCHEDULE, # Client flow (not used if interval buttons)
+    STATE_WAITING_FOR_TASK_TARGET, # Client flow (not used if target type buttons)
+    STATE_ADMIN_TASK_CONFIRM # Admin task confirmation (if added)
+) = map(str, range(36))  # 36 states total, ensure this covers all unique states
 
 # --- Conversation Context Keys ---
-CTX_USER_ID = "_user_id"; CTX_LANG = "_lang"; CTX_PHONE = "phone"; CTX_API_ID = "api_id"
-CTX_API_HASH = "api_hash"; CTX_AUTH_DATA = "auth_data"; CTX_INVITE_DETAILS = "invite_details"
-CTX_EXTEND_CODE = "extend_code"; CTX_ADD_BOTS_CODE = "add_bots_code"; CTX_FOLDER_ID = "folder_id"
-CTX_FOLDER_NAME = "folder_name"; CTX_FOLDER_ACTION = "folder_action"; CTX_SELECTED_BOTS = "selected_bots"
-CTX_TARGET_GROUP_IDS_TO_REMOVE = "target_group_ids_to_remove"; CTX_TASK_PHONE = "task_phone"
-CTX_TASK_SETTINGS = "task_settings"; CTX_PAGE = "page"; CTX_MESSAGE_ID = "message_id"
-CTX_TASK_BOT = "task_bot"; CTX_TASK_MESSAGE = "task_message"; CTX_TASK_SCHEDULE = "task_schedule"; CTX_TASK_TARGET = "task_target"; CTX_TASK_TARGET_TYPE = "task_target_type"; CTX_TASK_TARGET_FOLDER = "task_target_folder"
+CTX_USER_ID = "_user_id"
+CTX_LANG = "_lang"
+CTX_PHONE = "phone" # Used in admin userbot add
+CTX_API_ID = "api_id" # Used in admin userbot add
+CTX_API_HASH = "api_hash" # Used in admin userbot add
+CTX_AUTH_DATA = "auth_data" # Used in admin userbot add (Telethon state)
+CTX_INVITE_DETAILS = "invite_details" # (Potentially for admin invite creation, not currently used in states)
+CTX_EXTEND_CODE = "extend_code" # Admin extend subscription
+CTX_ADD_BOTS_CODE = "add_bots_code" # Admin assign bots to client
+CTX_FOLDER_ID = "folder_id" # Client folder management
+CTX_FOLDER_NAME = "folder_name" # Client folder management
+CTX_FOLDER_ACTION = "folder_action" # (Potentially for multi-step folder ops, not currently used)
+CTX_SELECTED_BOTS = "selected_bots" # Client join groups/task setup
+CTX_TARGET_GROUP_IDS_TO_REMOVE = "target_group_ids_to_remove" # Client folder group removal
+CTX_TASK_PHONE = "task_phone" # Client task setup specific bot
+CTX_TASK_SETTINGS = "task_settings" # Client task setup temporary settings
+CTX_PAGE = "page" # For pagination in general
+CTX_MESSAGE_ID = "message_id" # For send_or_edit_message
+
+# Admin Task Creation Context Keys (used by admin_handlers.py)
+CTX_TASK_BOT = "task_bot" # Phone of the bot for the admin task
+CTX_TASK_MESSAGE = "task_message" # Message/link for the admin task
+CTX_TASK_SCHEDULE = "task_schedule" # Cron schedule for the admin task
+CTX_TASK_TARGET = "task_target" # Target for the admin task (ID/username)
+CTX_TASK_TARGET_TYPE = "task_target_type" # (Not explicitly used by admin_handlers.py shown)
+CTX_TASK_TARGET_FOLDER = "task_target_folder" # (Not explicitly used by admin_handlers.py shown)
 
 # --- Callback Data Prefixes ---
 CALLBACK_ADMIN_PREFIX = "admin_"
 CALLBACK_CLIENT_PREFIX = "client_"
-CALLBACK_TASK_PREFIX = "task_"
+CALLBACK_TASK_PREFIX = "task_" # Used for client-side task setup AND admin task management
 CALLBACK_FOLDER_PREFIX = "folder_"
 CALLBACK_JOIN_PREFIX = "join_"
 CALLBACK_LANG_PREFIX = "lang_"
 CALLBACK_INTERVAL_PREFIX = "interval_"
-CALLBACK_GENERIC_PREFIX = "generic_"
+CALLBACK_GENERIC_PREFIX = "generic_" # For things like no-op pagination buttons
 
-
-# --- Utility Functions ---
+# --- Utility Functions (stubs removed, real ones in respective modules) ---
 def is_admin(user_id: int) -> bool:
     """Checks if a given user ID is in the ADMIN_IDS list."""
     return isinstance(user_id, int) and ADMIN_IDS and user_id in ADMIN_IDS
-
-async def get_user(user_id: int):
-    """Get user from database."""
-    try:
-        # Implement your database query here
-        # For now, return None to indicate user doesn't exist
-        return None
-    except Exception as e:
-        log.error(f"Error getting user {user_id}: {e}")
-        return None
-
-async def create_user(user_id: int, username: str):
-    """Create new user in database."""
-    try:
-        # Implement your database insertion here
-        # For now, just log the creation
-        log.info(f"Created new user: {user_id} ({username})")
-    except Exception as e:
-        log.error(f"Error creating user {user_id}: {e}")
-
-async def get_user_language(user_id: int) -> str:
-    """Get user's preferred language."""
-    try:
-        # Implement your language retrieval logic here
-        # For now, return 'en' as default
-        return 'en'
-    except Exception as e:
-        log.error(f"Error getting language for user {user_id}: {e}")
-        return 'en'
-
-def get_text(key: str, lang: str = 'en') -> str:
-    """Get localized text."""
-    # Implement your text localization logic here
-    texts = {
-        'en': {
-            'welcome_message': 'Welcome to the bot! Use /admin to access admin features.',
-            'not_admin': 'Sorry, this command is only available for administrators.',
-            'admin_menu': 'Admin Menu:\n1. Manage Users\n2. Settings\n3. Statistics',
-        }
-    }
-    return texts.get(lang, texts['en']).get(key, key)
-
-def build_admin_menu(user_id: int, context: 'CallbackContext'):
-    """Build admin menu keyboard."""
-    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-    
-    keyboard = [
-        [InlineKeyboardButton("Manage Users", callback_data='admin_users')],
-        [InlineKeyboardButton("Settings", callback_data='admin_settings')],
-        [InlineKeyboardButton("Statistics", callback_data='admin_stats')]
-    ]
-    return InlineKeyboardMarkup(keyboard)
 
 log.info("Configuration loaded successfully.")
 
