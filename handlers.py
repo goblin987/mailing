@@ -1154,8 +1154,8 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
     await send_or_edit_message(update, context, get_translation_text(user_id, 'join_processing', lang_override=lang))
     
     all_results_text = get_translation_text(user_id, 'join_results_title', lang_override=lang)
-    join_tasks = [telethon_api.join_groups_batch(phone, raw_links) for phone in selected_bots]
-    results_list_from_gather = await asyncio.gather(*join_tasks, return_exceptions=True)
+    join_tasks_coroutines = [telethon_api.join_groups_batch(phone, raw_links) for phone in selected_bots]
+    results_list_from_gather = await asyncio.gather(*join_tasks_coroutines, return_exceptions=True)
     
     for i, result_item in enumerate(results_list_from_gather):
         phone = selected_bots[i]
