@@ -73,6 +73,24 @@ from inspect import isawaitable
 COMMAND = 0
 ADMIN = 1
 
+def async_handler(func: Callable) -> Callable:
+    """Decorator to handle async functions in handlers."""
+    @wraps(func)
+    async def wrapped(update: Update, context: CallbackContext, *args: Any, **kwargs: Any) -> int:
+        try:
+            result = await func(update, context, *args, **kwargs)
+            if isawaitable(result):
+                result = await result
+            return result
+        except Exception as e:
+            log.error(f"Error in {func.__name__}: {e}", exc_info=True)
+            if update and isinstance(update, Update) and update.effective_message:
+                await update.effective_message.reply_text(
+                    "Sorry, an error occurred while processing your request. Please try again later."
+                )
+            return STATE_WAITING_FOR_COMMAND
+    return wrapped
+
 @async_handler
 async def start(update: Update, context: CallbackContext) -> int:
     """Start command handler."""
@@ -201,21 +219,6 @@ async def async_error_handler(update: object, context: CallbackContext) -> None:
             )
     except Exception as e:
         log.error(f"[async_error_handler] Failed to send async error message: {e}", exc_info=True)
-
-def async_handler(func: Callable) -> Callable:
-    """Decorator to handle async handlers and ensure proper state returns."""
-    @wraps(func)
-    async def wrapped(update: Update, context: CallbackContext, *args: Any, **kwargs: Any) -> int:
-        try:
-            result = await func(update, context, *args, **kwargs)
-            # Ensure we return an integer state, not a coroutine
-            if isawaitable(result):
-                result = await result
-            return result
-        except Exception as e:
-            logging.error(f"Error in {func.__name__}: {e}", exc_info=True)
-            return ConversationHandler.END
-    return wrapped
 
 @async_handler
 async def start_command(update: Update, context: CallbackContext) -> int:
