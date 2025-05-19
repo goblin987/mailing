@@ -2165,6 +2165,16 @@ async def handle_client_task_setup_callbacks(update, context, data, user_id, lan
         if context.user_data.get(CTX_TASK_PHONE): return await task_show_settings_menu(update, context)
         else: await client_menu(update, context); return ConversationHandler.END
 
+# Helper function to decide which group link processor to call
+async def _handle_group_links_logic(update: Update, context: CallbackContext) -> int | str | None:
+    """Helper to decide which group link processor to call."""
+    if CTX_FOLDER_ID in context.user_data:
+        # This is for adding links to an existing folder
+        return await process_folder_links(update, context)
+    else:
+        # This is for the generic "join groups" feature for selected bots
+        return await process_join_group_links(update, context)
+
 # --- Conversation Handler Definition ---
 main_conversation = ConversationHandler(
     entry_points=[
@@ -2196,17 +2206,8 @@ main_conversation = ConversationHandler(
         STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name)],
         STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
         STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
-        # STATE_WAITING_FOR_GROUP_LINKS has two entry points: general join and folder add
-        # For folder add, process_folder_links is called.
-        # For general join, process_join_group_links is called.
-        # This means the CallbackQueryHandler that leads to this state must correctly route or this state must distinguish.
-        # Let's assume process_join_group_links is for the generic client join flow,
-        # and process_folder_links is specifically for adding to an existing folder.
-        # The state STATE_WAITING_FOR_GROUP_LINKS will use different handlers based on context if needed,
-        # or the callback leading to it should direct to a more specific state.
-        # For now, main_callback_handler sets up for process_join_group_links. process_folder_links is also used.
         STATE_WAITING_FOR_GROUP_LINKS: [
-            MessageHandler(Filters.text & ~Filters.command, lambda u, c: process_folder_links(u, c) if CTX_FOLDER_ID in c.user_data else process_join_group_links(u, c))
+            MessageHandler(Filters.text & ~Filters.command, _handle_group_links_logic)
         ],
         STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
         STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command, process_folder_rename)],
