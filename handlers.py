@@ -104,7 +104,7 @@ def sync_wrapper_for_async_handler(async_handler_func):
             return ConversationHandler.END
     return wrapper
 
-# --- Original async handlers renamed with _async_ prefix if they are MessageHandler callbacks or CommandHandler entry points ---
+# --- Original async handlers renamed with _async_ prefix ---
 async def _async_start(update: Update, context: CallbackContext) -> str:
     user_id, lang = get_user_id_and_lang(update, context)
     client_info = db.find_client_by_user_id(user_id)
@@ -500,7 +500,6 @@ sync_admin_process_task_message = sync_wrapper_for_async_handler(admin_handlers.
 sync_admin_process_task_schedule = sync_wrapper_for_async_handler(admin_handlers.admin_process_task_schedule)
 sync_admin_process_task_target = sync_wrapper_for_async_handler(admin_handlers.admin_process_task_target)
 
-
 # --- Functions that are NOT direct ConversationHandler state MessageHandlers or entry_points ---
 # These are typically `async def` and are awaited by `main_callback_handler` or other async functions.
 # They do NOT need the sync_wrapper themselves.
@@ -512,17 +511,18 @@ async def async_error_handler(update: object, context: CallbackContext) -> None:
         if isinstance(update, Update):
             if update.effective_user: user_id = update.effective_user.id
             if update.effective_chat: chat_id = update.effective_chat.id
-            if context.user_data: current_lang = context.user_data.get(CTX_LANG, 'en')
-            if user_id and current_lang == 'en':
+            if context and context.user_data: current_lang = context.user_data.get(CTX_LANG, 'en') # Check context first
+            if user_id and (not current_lang or current_lang == 'en'): # Query DB if lang is default or not set
                 db_lang = db.get_user_language(user_id)
                 if db_lang: current_lang = db_lang
         elif isinstance(update, CallbackQuery):
             if update.from_user: user_id = update.from_user.id
             if update.message and update.message.chat: chat_id = update.message.chat.id
-            if context.user_data: current_lang = context.user_data.get(CTX_LANG, 'en')
-            if user_id and current_lang == 'en':
+            if context and context.user_data: current_lang = context.user_data.get(CTX_LANG, 'en')
+            if user_id and (not current_lang or current_lang == 'en'):
                 db_lang = db.get_user_language(user_id)
                 if db_lang: current_lang = db_lang
+
         if not chat_id and user_id: chat_id = user_id
         if chat_id: await context.bot.send_message(chat_id=chat_id, text=get_translation_text(user_id, 'error_generic', lang_override=current_lang), parse_mode=ParseMode.HTML)
         else: log.warning("[async_error_handler] Could not determine chat_id to send error message.")
@@ -616,6 +616,7 @@ async def client_ask_select_language(update: Update, context: CallbackContext) -
 
 async def set_language_handler(update: Update, context: CallbackContext) -> int | None:
     query = update.callback_query
+    if query: await query.answer() # Added await
     user_id, _ = get_user_id_and_lang(update, context)
     selected_lang_code = query.data.split(CALLBACK_LANG_PREFIX)[1]
     if selected_lang_code in language_names:
@@ -643,8 +644,7 @@ async def client_folder_menu(update: Update, context: CallbackContext) -> int:
 async def client_select_folder_to_edit_or_delete(update: Update, context: CallbackContext, action: str) -> str:
     query = update.callback_query
     if query: await query.answer()
-    user_id, lang = get_user_id_and_lang(update, context)
-    current_page = 0
+    user_id, lang = get_user_id_and_lang(update, context); current_page = 0
     try:
         if query and query.data and '?page=' in query.data: current_page = int(query.data.split('?page=')[1])
     except (ValueError, IndexError, AttributeError): current_page = 0
@@ -739,7 +739,7 @@ async def process_join_group_links(update: Update, context: CallbackContext) -> 
         bot_display_name = html.escape(f"@{bot_db_info.get('username')}" if bot_db_info.get('username') else phone)
         all_results_text += "\n" + get_translation_text(user_id, 'join_results_bot_header', lang_override=lang, display_name=bot_display_name)
         if isinstance(result_item, Exception): log.error(f"Join batch task for {phone} raised exception: {result_item}", exc_info=True); all_results_text += f"\n  -> {get_translation_text(user_id, 'error_generic', lang_override=lang)} ({html.escape(str(result_item))})"; continue
-        error_info, results_dict_for_bot = result_item
+        error_info, results_dict_for_bot = result_item 
         if error_info and error_info.get("error"): all_results_text += f"\n  -> {get_translation_text(user_id, 'error_generic', lang_override=lang)} ({html.escape(error_info['error'])})"; continue
         if not results_dict_for_bot: all_results_text += f"\n  -> ({get_translation_text(user_id, 'error_no_results', lang_override=lang)})"; continue
         processed_links_count = 0
@@ -983,7 +983,7 @@ async def admin_select_userbot_to_remove(update: Update, context: CallbackContex
     if not all_bots: text = get_translation_text(user_id, 'admin_userbot_no_bots_to_remove', lang_override=lang); markup = InlineKeyboardMarkup([[InlineKeyboardButton(get_translation_text(user_id, 'button_back', lang_override=lang), callback_data=f"{CALLBACK_ADMIN_PREFIX}back_to_menu")]]); await send_or_edit_message(update, context, text, reply_markup=markup); return ConversationHandler.END
     total_items = len(all_bots); start_index = current_page * ITEMS_PER_PAGE; end_index = start_index + ITEMS_PER_PAGE; bots_page = all_bots[start_index:end_index]
     text = get_translation_text(user_id, 'admin_userbot_select_remove', lang_override=lang); keyboard = []
-    for bot in bots_page:
+    for bot in bots_page: 
         phone_val = bot.get('phone_number'); username = bot.get('username'); display_name = f"@{username}" if username else phone_val; button_text = f"🗑️ {html.escape(display_name)}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"{CALLBACK_ADMIN_PREFIX}remove_bot_confirm_prompt_{phone_val}")])
     base_callback = f"{CALLBACK_ADMIN_PREFIX}remove_bot_select"; pagination_buttons = build_pagination_buttons(base_callback, current_page, total_items, ITEMS_PER_PAGE, lang=lang)
@@ -1159,6 +1159,13 @@ async def admin_delete_task_execute(update: Update, context: CallbackContext) ->
     else: await send_or_edit_message(update, context, get_translation_text(user_id, 'admin_task_error', lang_override=lang))
     query.data = f"{CALLBACK_ADMIN_PREFIX}view_tasks?page=0"; return await admin_view_tasks(update, context)
 
+async def conversation_fallback(update: Update, context: CallbackContext) -> int:
+    user_id, lang = get_user_id_and_lang(update, context)
+    log.warning(f"Conversation fallback for user {user_id}. Update: {update.to_json() if update else 'N/A'}")
+    await send_or_edit_message(update, context, get_translation_text(user_id, 'conversation_fallback', lang_override=lang), parse_mode=ParseMode.HTML, reply_markup=None)
+    clear_conversation_data(context)
+    return ConversationHandler.END
+
 # --- Main Callback Handler (Stays async, called by CallbackQueryHandler) ---
 async def main_callback_handler(update: Update, context: CallbackContext) -> str | int | None:
     query = update.callback_query
@@ -1272,62 +1279,60 @@ async def handle_client_task_setup_callbacks(update, context, data, user_id, lan
 # --- Conversation Handler Definition ---
 main_conversation = ConversationHandler(
     entry_points=[
-        CommandHandler('start', start), # Uses wrapped version
-        CommandHandler('admin', admin_command_entry), # Uses wrapped version
-        CommandHandler('cancel', cancel_command_general_sync), # Wrapped version
+        CommandHandler('start', start),
+        CommandHandler('admin', admin_command_entry),
+        CommandHandler('cancel', cancel_command_general_sync),
     ],
     states={
-        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command, process_invitation_code)], # Wrapped
+        STATE_WAITING_FOR_CODE: [MessageHandler(Filters.text & ~Filters.command, process_invitation_code)],
         STATE_WAITING_FOR_ADMIN_COMMAND: [
-            CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_ADMIN_PREFIX}"), # main_callback_handler is async, CBQ handles it
-            MessageHandler(Filters.text & ~Filters.command, process_admin_command_text)      # Wrapped
+            CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_ADMIN_PREFIX}"),
+            MessageHandler(Filters.text & ~Filters.command, process_admin_command_text)
         ],
         STATE_WAITING_FOR_LANGUAGE: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_LANG_PREFIX}")],
         
-        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command, process_admin_phone)], # Wrapped
-        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_id)], # Wrapped
-        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_hash)], # Wrapped
-        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_code)], # Wrapped
-        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_password)], # Wrapped
+        STATE_WAITING_FOR_PHONE: [MessageHandler(Filters.text & ~Filters.command, process_admin_phone)],
+        STATE_WAITING_FOR_API_ID: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_id)],
+        STATE_WAITING_FOR_API_HASH: [MessageHandler(Filters.text & ~Filters.command, process_admin_api_hash)],
+        STATE_WAITING_FOR_CODE_USERBOT: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_code)],
+        STATE_WAITING_FOR_PASSWORD: [MessageHandler(Filters.text & ~Filters.command, process_admin_userbot_password)],
         
-        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command, process_admin_invite_details)], # Wrapped
-        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_code)], # Wrapped
-        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_days)], # Wrapped
-        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_code)], # Wrapped
-        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_count)], # Wrapped
-        
+        STATE_WAITING_FOR_SUB_DETAILS: [MessageHandler(Filters.text & ~Filters.command, process_admin_invite_details)],
+        STATE_WAITING_FOR_EXTEND_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_code)],
+        STATE_WAITING_FOR_EXTEND_DAYS: [MessageHandler(Filters.text & ~Filters.command, process_admin_extend_days)],
+        STATE_WAITING_FOR_ADD_USERBOTS_CODE: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_code)],
+        STATE_WAITING_FOR_ADD_USERBOTS_COUNT: [MessageHandler(Filters.text & ~Filters.command, process_admin_add_bots_count)],
         STATE_ADMIN_CONFIRM_USERBOT_RESET: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_ADMIN_PREFIX}")],
 
-        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name)], # Wrapped
+        STATE_WAITING_FOR_FOLDER_NAME: [MessageHandler(Filters.text & ~Filters.command, process_folder_name)],
         STATE_WAITING_FOR_FOLDER_SELECTION: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
         STATE_WAITING_FOR_FOLDER_ACTION: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
-        
-        STATE_WAITING_FOR_GROUP_LINKS: [ MessageHandler(Filters.text & ~Filters.command, _handle_group_links_logic_sync) ], # Wrapped helper
-
+        STATE_WAITING_FOR_GROUP_LINKS: [
+            MessageHandler(Filters.text & ~Filters.command, _handle_group_links_logic_sync)
+        ],
         STATE_FOLDER_EDIT_REMOVE_SELECT: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_FOLDER_PREFIX}")],
-        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command, process_folder_rename)], # Wrapped
+        STATE_FOLDER_RENAME_PROMPT: [MessageHandler(Filters.text & ~Filters.command, process_folder_rename)],
 
         STATE_WAITING_FOR_USERBOT_SELECTION: [CallbackQueryHandler(main_callback_handler, pattern=f"^({CALLBACK_TASK_PREFIX}|{CALLBACK_JOIN_PREFIX})")],
         STATE_TASK_SETUP: [CallbackQueryHandler(main_callback_handler, pattern=f"^{CALLBACK_TASK_PREFIX}|{CALLBACK_INTERVAL_PREFIX}")],
-        
         STATE_WAITING_FOR_PRIMARY_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, sync_process_task_link_primary)],
         STATE_WAITING_FOR_FALLBACK_MESSAGE_LINK: [MessageHandler(Filters.text & ~Filters.command, sync_process_task_link_fallback)],
-        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command, process_task_start_time)], # Wrapped
+        STATE_WAITING_FOR_START_TIME: [MessageHandler(Filters.text & ~Filters.command, process_task_start_time)],
         
-        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, sync_admin_process_task_message)], # Wrapped admin_handler
-        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command, sync_admin_process_task_schedule)], # Wrapped admin_handler
-        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command, sync_admin_process_task_target)], # Wrapped admin_handler
+        STATE_ADMIN_TASK_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, sync_admin_process_task_message)],
+        STATE_ADMIN_TASK_SCHEDULE: [MessageHandler(Filters.text & ~Filters.command, sync_admin_process_task_schedule)],
+        STATE_ADMIN_TASK_TARGET: [MessageHandler(Filters.text & ~Filters.command, sync_admin_process_task_target)],
         
-        ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, conversation_fallback_sync)], # Wrapped
+        ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, conversation_fallback_sync)],
     },
     fallbacks=[
-        CommandHandler('cancel', cancel_command_general_sync), # Wrapped
+        CommandHandler('cancel', cancel_command_general_sync),
         CallbackQueryHandler(main_callback_handler), 
-        MessageHandler(Filters.all, conversation_fallback_sync) # Wrapped
+        MessageHandler(Filters.all, conversation_fallback_sync) 
     ],
     name="main_conversation",
     persistent=False,
-    allow_reentry=True, 
+    allow_reentry=True,
     conversation_timeout=timedelta(hours=1).total_seconds()
 )
 
